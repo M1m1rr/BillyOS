@@ -1,5 +1,6 @@
 #ifndef _GDT_H
 #define _GDT_H
+#define GDT_KERNEL_CODE_SEGMENT_SELECTOR 0x8
 
 #include <stdint.h>
 

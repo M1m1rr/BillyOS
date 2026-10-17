@@ -9,7 +9,7 @@ struct IDTR _idt_idtr = {
 };
 
 void initialize_idt(void) {
-    for (uint32_t i = 0; i < 256; i++) {
+    for (uint32_t i = 0; i < ISR_STUB_TABLE_LIMIT; i++) {
         set_interrupt_gate(i, isr_stub_table[i], GDT_KERNEL_CODE_SEGMENT_SELECTOR, 0);
     }
     __asm__ volatile("lidt %0" : : "m"(_idt_idtr));
