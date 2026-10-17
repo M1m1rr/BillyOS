@@ -20,13 +20,29 @@ void kernel_setup(void) {
         char c;
         get_keyboard_buffer(&c);
         if (c) {
-            framebuffer_write(row, col, c, 0xF, 0);
-            if (col >= FRAMEBUFFER_WIDTH) {
-                ++row;
-                col = 0;
-            } else {
-                ++col;
+            
+            if (c == '\b') {
+                if (col > 0) {
+                    col--;
+                    framebuffer_write(row, col, 0x00, 0xF, 0); 
+                }
+            } 
+            
+            else if (c == '\n') {
+                row++; 
+                col = 0; 
+            } 
+            
+            else {
+                framebuffer_write(row, col, c, 0xF, 0);
+                col++;
+                
+                if (col >= FRAMEBUFFER_WIDTH) {
+                    row++;
+                    col = 0;
+                }
             }
+            
             framebuffer_set_cursor(row, col);
         }
     }
