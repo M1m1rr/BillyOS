@@ -22,6 +22,15 @@
 - `genisoimage` / `xorriso` / `grub-pc-bin`
 
 ### Langkah-langkah Pembuatan & Menjalankan OS
+### Kompilasi Source Code
+```bash
+make build
+```
+
+### Menjalankan OS di Emulator
+```bash
+make run
+```
 
 ## Fitur yang Dibuat (so far)
 - Kernel Entrypoint & GDT/IDT: Inisialisasi dasar kernel x86 32-bit, penanganan interupsi, dan port I/O.
