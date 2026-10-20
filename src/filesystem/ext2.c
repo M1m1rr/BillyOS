@@ -59,6 +59,10 @@ void init_directory_table(struct EXT2Inode *node, uint32_t inode, uint32_t paren
 
 // Membaca Inode dari disk berdasarkan nomor inode
 void read_inode(uint32_t inode, struct EXT2Inode *out_node) {
+    if (inode == 0 || inode > fs_superblock.s_inodes_count) {
+        memset(out_node, 0, sizeof(struct EXT2Inode));
+        return;
+    }
     uint32_t bgd_idx   = inode_to_bgd(inode);
     uint32_t local_idx = inode_to_local(inode);
 
@@ -73,6 +77,7 @@ void read_inode(uint32_t inode, struct EXT2Inode *out_node) {
 
 // Menuliskan kembali Inode ke disk (sync)
 void sync_node(struct EXT2Inode *node, uint32_t inode) {
+    if (inode == 0 || inode > fs_superblock.s_inodes_count) return;
     uint32_t bgd_idx   = inode_to_bgd(inode);
     uint32_t local_idx = inode_to_local(inode);
 
@@ -223,7 +228,8 @@ void initialize_filesystem_ext2(void) {
 }
 
 int8_t read_directory(struct EXT2DriverRequest *prequest) {
-    if (!prequest || !prequest->buf || prequest->parent_inode == 0) return -1;
+    if (!prequest || !prequest->buf) return -1;
+    if (prequest->parent_inode == 0 || prequest->parent_inode > fs_superblock.s_inodes_count) return 3;
 
     // 1. Validasi parent folder
     struct EXT2Inode parent_node;
@@ -257,7 +263,8 @@ int8_t read_directory(struct EXT2DriverRequest *prequest) {
 }
 
 int8_t read(struct EXT2DriverRequest request) {
-    if (!request.buf || request.parent_inode == 0) return -1;
+    if (!request.buf) return -1;
+    if (request.parent_inode == 0 || request.parent_inode > fs_superblock.s_inodes_count) return 4;
 
     // 1. Validasi parent folder
     struct EXT2Inode parent_node;
@@ -410,7 +417,8 @@ static bool add_directory_entry(struct EXT2Inode *parent_node, uint32_t child_in
 // ==================== IMPLEMENTASI WRITE ====================
 
 int8_t write(struct EXT2DriverRequest *request) {
-    if (!request || request->parent_inode == 0) return -1;
+    if (!request) return -1;
+    if (request->parent_inode == 0 || request->parent_inode > fs_superblock.s_inodes_count) return 2;
 
     // 1. Validasi parent inode
     struct EXT2Inode parent_node;
@@ -490,7 +498,7 @@ int8_t write(struct EXT2DriverRequest *request) {
 // ==================== IMPLEMENTASI DELETE ====================
 
 int8_t delete(struct EXT2DriverRequest request) {
-    if (request.parent_inode == 0) return -1;
+    if (request.parent_inode == 0 || request.parent_inode > fs_superblock.s_inodes_count) return 3;
 
     // 1. Validasi parent folder
     struct EXT2Inode parent_node;
@@ -578,7 +586,6 @@ int8_t delete(struct EXT2DriverRequest request) {
     // 6. Deallokasi Inode milik target
     uint32_t grp     = inode_to_bgd(target_inode_num);
     uint32_t bit_pos = inode_to_local(target_inode_num);
-
     struct BlockBuffer ibm;
     read_blocks(&ibm, fs_bgd_table.table[grp].bg_inode_bitmap, 1);
     ibm.buf[bit_pos / 8] &= ~(1 << (bit_pos % 8)); // Bebaskan bit

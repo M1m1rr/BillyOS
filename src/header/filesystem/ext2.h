@@ -281,6 +281,9 @@ uint32_t inode_to_local(uint32_t inode);
  * @param parent_inode inode of parent directory (if root directory, the parent is itself)
  */
 void init_directory_table(struct EXT2Inode *node, uint32_t inode, uint32_t parent_inode);
+void read_inode(uint32_t inode, struct EXT2Inode *out_node);
+uint32_t find_entry_in_dir(struct EXT2Inode *parent_node, const char *name, uint8_t name_len, uint8_t *out_file_type);
+
 /**
  * @brief check whether filesystem signature is missing or not in boot sector
  *
