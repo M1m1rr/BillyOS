@@ -31,4 +31,4 @@
 - Process & Scheduler: Pengelolaan proses dan penjadualan (multi-tasking).
 
 ## Maskot
-(ucup)[ucup.jpg]
+![maskot](ucup.jpg)
