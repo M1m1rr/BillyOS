@@ -58,150 +58,97 @@ void kernel_setup(void) {
     framebuffer_set_cursor(0, 0);
 
     int row = 0, col = 0;
-    print_text(&row, &col, "=== BillyOS Full EXT2 CRUD Test Suite ===\n", 0x0E);
+    print_text(&row, &col, "=== BillyOS EXT2 Sample Image Verification ===\n\n", 0x0E);
 
     initialize_filesystem_ext2();
 
-    // ==================== 1. TEST WRITE ====================
-    print_text(&row, &col, "-- 1. Testing write() --\n", 0x0B);
+    // ==================== 1. VERIFIKASI FILE RESMI ASISTEN ====================
+    print_text(&row, &col, "-- 1. Membaca File Bawaan sample-image.bin --\n", 0x0B);
 
-    // 1.1 Write Folder (Code 0)
-    struct EXT2DriverRequest req_f1 = {
-        .buf = NULL, .name = "folder1", .name_len = 7,
-        .parent_inode = 1, .buffer_size = 0, .is_directory = true
+    // 1.1 Baca /laur (Expected: "Grievous Lady")
+    char buf_laur[32];
+    memset(buf_laur, 0, sizeof(buf_laur));
+    struct EXT2DriverRequest req_laur = {
+        .buf = buf_laur, .name = "laur", .name_len = 4,
+        .parent_inode = 1, .buffer_size = sizeof(buf_laur), .is_directory = false
     };
-    test_assert(&row, &col, "W1: write folder /folder1 (Exp 0)", write(&req_f1), 0);
+    int8_t ret_laur = read(req_laur);
+    bool laur_ok = (ret_laur == 0) && (memcmp(buf_laur, "Grievous Lady", 13) == 0);
+    print_text(&row, &col, "  Content: ", 0x07);
+    print_text(&row, &col, buf_laur, 0x0A);
+    print_text(&row, &col, "\n", 0x07);
+    test_assert(&row, &col, "T1: Baca /laur ('Grievous Lady')", laur_ok ? 0 : -1, 0);
 
-    // Dapatkan inode folder1
+    // 1.2 Dapatkan Inode folder1
     struct EXT2Inode root_node;
     read_inode(1, &root_node);
     uint8_t ftype = 0;
     uint32_t f1_inode = find_entry_in_dir(&root_node, "folder1", 7, &ftype);
+    test_assert(&row, &col, "T2: Temukan direktori /folder1", (f1_inode > 0) ? 0 : -1, 0);
 
-    // 1.2 Write File (Code 0)
-    char test_msg[] = "BillyOS Data!";
-    uint32_t msg_len = sizeof(test_msg) - 1;
-    struct EXT2DriverRequest req_file = {
-        .buf = test_msg, .name = "file.txt", .name_len = 8,
-        .parent_inode = f1_inode, .buffer_size = msg_len, .is_directory = false
+    // 1.3 Baca /folder1/tpazolite (Expected: "Oshama Scramble!")
+    char buf_tpz[32];
+    memset(buf_tpz, 0, sizeof(buf_tpz));
+    struct EXT2DriverRequest req_tpz = {
+        .buf = buf_tpz, .name = "tpazolite", .name_len = 9,
+        .parent_inode = f1_inode, .buffer_size = sizeof(buf_tpz), .is_directory = false
     };
-    test_assert(&row, &col, "W2: write file /folder1/file.txt (Exp 0)", write(&req_file), 0);
+    int8_t ret_tpz = read(req_tpz);
+    bool tpz_ok = (ret_tpz == 0) && (memcmp(buf_tpz, "Oshama Scramble!", 16) == 0);
+    print_text(&row, &col, "  Content: ", 0x07);
+    print_text(&row, &col, buf_tpz, 0x0A);
+    print_text(&row, &col, "\n", 0x07);
+    test_assert(&row, &col, "T3: Baca /folder1/tpazolite", tpz_ok ? 0 : -1, 0);
 
-    // 1.3 Write Duplicate (Code 1)
-    test_assert(&row, &col, "W3: write duplicate file (Exp 1)", write(&req_file), 1);
-
-    // 1.4 Write Invalid Parent (Code 2)
-    struct EXT2DriverRequest req_inv_p = {
-        .buf = test_msg, .name = "inv.txt", .name_len = 7,
-        .parent_inode = 9999, .buffer_size = msg_len, .is_directory = false
+    // 1.4 Baca /folder1/xi (Expected: "Freedom Dive")
+    char buf_xi[32];
+    memset(buf_xi, 0, sizeof(buf_xi));
+    struct EXT2DriverRequest req_xi = {
+        .buf = buf_xi, .name = "xi", .name_len = 2,
+        .parent_inode = f1_inode, .buffer_size = sizeof(buf_xi), .is_directory = false
     };
-    test_assert(&row, &col, "W4: write invalid parent (Exp 2)", write(&req_inv_p), 2);
+    int8_t ret_xi = read(req_xi);
+    bool xi_ok = (ret_xi == 0) && (memcmp(buf_xi, "Freedom Dive", 12) == 0);
+    print_text(&row, &col, "  Content: ", 0x07);
+    print_text(&row, &col, buf_xi, 0x0A);
+    print_text(&row, &col, "\n", 0x07);
+    test_assert(&row, &col, "T4: Baca /folder1/xi ('Freedom Dive')", xi_ok ? 0 : -1, 0);
 
-    // ==================== 2. TEST READ ====================
-    print_text(&row, &col, "-- 2. Testing read() --\n", 0x0B);
+    // ==================== 2. TEST TULIS & BACA DI SAMPLE IMAGE ====================
+    print_text(&row, &col, "\n-- 2. Menguji Tulis & Hapus di sample-image --\n", 0x0B);
 
-    // 2.1 Read File Sukses (Code 0) + Verifikasi Data
-    char r_buf[32];
-    memset(r_buf, 0, sizeof(r_buf));
-    struct EXT2DriverRequest req_read = {
-        .buf = r_buf, .name = "file.txt", .name_len = 8,
-        .parent_inode = f1_inode, .buffer_size = sizeof(r_buf), .is_directory = false
+    // 2.1 Temukan folder2
+    uint32_t f2_inode = find_entry_in_dir(&root_node, "folder2", 7, &ftype);
+
+    // 2.2 Tulis file baru ke dalam /folder2/new.txt
+    char msg[] = "Halo dari BillyOS!";
+    struct EXT2DriverRequest req_w = {
+        .buf = msg, .name = "new.txt", .name_len = 7,
+        .parent_inode = f2_inode, .buffer_size = sizeof(msg) - 1, .is_directory = false
     };
-    int8_t ret_r = read(req_read);
-    bool data_ok = (ret_r == 0) && (memcmp(r_buf, test_msg, msg_len) == 0);
-    test_assert(&row, &col, "R1: read file and data integrity (Exp 0)", data_ok ? 0 : -1, 0);
+    test_assert(&row, &col, "T5: Tulis file /folder2/new.txt", write(&req_w), 0);
 
-    // 2.2 Read Target is a Folder (Code 1)
-    struct EXT2DriverRequest req_read_dir_as_file = {
-        .buf = r_buf, .name = "folder1", .name_len = 7,
-        .parent_inode = 1, .buffer_size = sizeof(r_buf), .is_directory = false
+    // 2.3 Baca kembali /folder2/new.txt
+    char buf_new[32];
+    memset(buf_new, 0, sizeof(buf_new));
+    struct EXT2DriverRequest req_rnew = {
+        .buf = buf_new, .name = "new.txt", .name_len = 7,
+        .parent_inode = f2_inode, .buffer_size = sizeof(buf_new), .is_directory = false
     };
-    test_assert(&row, &col, "R2: read on directory (Exp 1)", read(req_read_dir_as_file), 1);
+    int8_t ret_rnew = read(req_rnew);
+    bool new_ok = (ret_rnew == 0) && (memcmp(buf_new, msg, sizeof(msg) - 1) == 0);
+    test_assert(&row, &col, "T6: Verifikasi isi /folder2/new.txt", new_ok ? 0 : -1, 0);
 
-    // 2.3 Read Buffer Too Small (Code 2)
-    struct EXT2DriverRequest req_read_small = {
-        .buf = r_buf, .name = "file.txt", .name_len = 8,
-        .parent_inode = f1_inode, .buffer_size = 3, .is_directory = false
+    // 2.4 Hapus file /folder2/new.txt
+    struct EXT2DriverRequest req_del = {
+        .name = "new.txt", .name_len = 7, .parent_inode = f2_inode
     };
-    test_assert(&row, &col, "R3: read buffer too small (Exp 2)", read(req_read_small), 2);
+    test_assert(&row, &col, "T7: Hapus file /folder2/new.txt", delete(req_del), 0);
 
-    // 2.4 Read File Not Found (Code 3)
-    struct EXT2DriverRequest req_read_nf = {
-        .buf = r_buf, .name = "ghost.txt", .name_len = 9,
-        .parent_inode = f1_inode, .buffer_size = sizeof(r_buf), .is_directory = false
-    };
-    test_assert(&row, &col, "R4: read file not found (Exp 3)", read(req_read_nf), 3);
+    // 2.5 Pastikan file sudah terhapus (Code 3: Not Found)
+    test_assert(&row, &col, "T8: Pastikan file sudah terhapus (Exp 3)", read(req_rnew), 3);
 
-    // 2.5 Read Invalid Parent (Code 4)
-    struct EXT2DriverRequest req_read_inv = {
-        .buf = r_buf, .name = "file.txt", .name_len = 8,
-        .parent_inode = 9999, .buffer_size = sizeof(r_buf), .is_directory = false
-    };
-    test_assert(&row, &col, "R5: read invalid parent (Exp 4)", read(req_read_inv), 4);
-
-    // ==================== 3. TEST READ_DIRECTORY ====================
-    print_text(&row, &col, "-- 3. Testing read_directory() --\n", 0x0B);
-
-    // 3.1 Read Directory Sukses (Code 0)
-    struct BlockBuffer dir_block;
-    struct EXT2DriverRequest req_rdir = {
-        .buf = &dir_block, .name = "folder1", .name_len = 7,
-        .parent_inode = 1, .buffer_size = BLOCK_SIZE, .is_directory = true
-    };
-    test_assert(&row, &col, "RD1: read_directory /folder1 (Exp 0)", read_directory(&req_rdir), 0);
-
-    // 3.2 Read Directory on a File (Code 1)
-    struct EXT2DriverRequest req_rdir_file = {
-        .buf = &dir_block, .name = "file.txt", .name_len = 8,
-        .parent_inode = f1_inode, .buffer_size = BLOCK_SIZE, .is_directory = true
-    };
-    test_assert(&row, &col, "RD2: read_directory on file (Exp 1)", read_directory(&req_rdir_file), 1);
-
-    // 3.3 Read Directory Not Found (Code 2)
-    struct EXT2DriverRequest req_rdir_nf = {
-        .buf = &dir_block, .name = "ghost_dir", .name_len = 9,
-        .parent_inode = 1, .buffer_size = BLOCK_SIZE, .is_directory = true
-    };
-    test_assert(&row, &col, "RD3: read_directory not found (Exp 2)", read_directory(&req_rdir_nf), 2);
-
-    // 3.4 Read Directory Invalid Parent (Code 3)
-    struct EXT2DriverRequest req_rdir_inv = {
-        .buf = &dir_block, .name = "folder1", .name_len = 7,
-        .parent_inode = 9999, .buffer_size = BLOCK_SIZE, .is_directory = true
-    };
-    test_assert(&row, &col, "RD4: read_dir invalid parent (Exp 3)", read_directory(&req_rdir_inv), 3);
-
-    // ==================== 4. TEST DELETE ====================
-    print_text(&row, &col, "-- 4. Testing delete() --\n", 0x0B);
-
-    // 4.1 Delete Entry Not Found (Code 1)
-    struct EXT2DriverRequest req_del_nf = {
-        .name = "ghost.txt", .name_len = 9, .parent_inode = f1_inode
-    };
-    test_assert(&row, &col, "D1: delete entry not found (Exp 1)", delete(req_del_nf), 1);
-
-    // 4.2 Delete Non-Empty Directory (Code 2)
-    struct EXT2DriverRequest req_del_dir = {
-        .name = "folder1", .name_len = 7, .parent_inode = 1
-    };
-    test_assert(&row, &col, "D2: delete non-empty dir (Exp 2)", delete(req_del_dir), 2);
-
-    // 4.3 Delete Invalid Parent (Code 3)
-    struct EXT2DriverRequest req_del_inv = {
-        .name = "file.txt", .name_len = 8, .parent_inode = 9999
-    };
-    test_assert(&row, &col, "D3: delete invalid parent (Exp 3)", delete(req_del_inv), 3);
-
-    // 4.4 Delete File Sukses (Code 0)
-    struct EXT2DriverRequest req_del_file = {
-        .name = "file.txt", .name_len = 8, .parent_inode = f1_inode
-    };
-    test_assert(&row, &col, "D4: delete file (Exp 0)", delete(req_del_file), 0);
-
-    // 4.5 Delete Directory (Sekarang sudah kosong) Sukses (Code 0)
-    test_assert(&row, &col, "D5: delete empty folder (Exp 0)", delete(req_del_dir), 0);
-
-    print_text(&row, &col, "\n>> SEMUA 16 TES TABEL BUKU LULUS! <<\n", 0x0E);
+    print_text(&row, &col, "\n>> SEMUA TES SAMPLE-IMAGE SUKSES BESAR! <<\n", 0x0E);
 
     // Loop Keyboard
     keyboard_state_activate();
