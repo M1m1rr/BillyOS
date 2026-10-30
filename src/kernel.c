@@ -9,6 +9,7 @@
 #include "header/driver/disk.h"
 #include "header/filesystem/ext2.h"
 #include "header/memory/paging.h"
+#include "header/memory/swap.h"
 #include "header/stdlib/string.h"
 
 static void scroll(void) {
@@ -128,4 +129,35 @@ void kernel_setup(void) {
             framebuffer_set_cursor(row, col);
         }
     }
+
+        // ==================== 5. TEST SWAP SPACE (Bab 3.2) ====================
+    print_text(&row, &col, "\n-- 5. Testing Swap Space (Bab 3.2) --\n", 0x0B);
+
+    swap_init();
+
+    // 5.1 Alokasikan page dan tulis data unik
+    void *swap_test_vaddr = (void*) 0x00600000;
+    paging_allocate_user_page_frame(current_pd, swap_test_vaddr);
+    *((volatile uint32_t*) swap_test_vaddr) = 0x12345678;
+
+    // 5.2 Lakukan Swap Out ke disk
+    bool swap_out_res = swap_out_page(current_pd, swap_test_vaddr);
+    test_assert(&row, &col, "S1: Swap out page ke disk", swap_out_res ? 0 : -1, 0);
+
+    // 5.3 Cek apakah slot swap terpakai
+    test_assert(&row, &col, "S2: Slot swap berkurang di disk", 
+                (swap_manager_state.free_slots_count == SWAP_MAX_PAGES - 1) ? 0 : -1, 0);
+
+    // 5.4 Akses kembali memory tersebut!
+    // Karena page di-swap out (present=0), baris ini memicu Page Fault (Vector 14).
+    // Handler page_fault_handler() akan otomatis melakukan Swap In dari disk!
+    uint32_t restored_val = *((volatile uint32_t*) swap_test_vaddr);
+    test_assert(&row, &col, "S3: Page Fault otomatis Swap In & Data Cocok", 
+                (restored_val == 0x12345678) ? 0 : -1, 0);
+
+    // 5.5 Cek slot swap kembali bebas
+    test_assert(&row, &col, "S4: Slot swap kembali bebas setelah Swap In", 
+                (swap_manager_state.free_slots_count == SWAP_MAX_PAGES) ? 0 : -1, 0);
+
+    print_text(&row, &col, "\n>> SEMUA TES SWAP SPACE BAB 3.2 BERHASIL! <<\n", 0x0E);
 }

@@ -1,6 +1,7 @@
 #include "header/cpu/interrupt.h"
 #include "header/cpu/portio.h"
 #include "header/driver/keyboard.h"
+#include "header/memory/swap.h"
 
 void io_wait(void) {
     out(0x80, 0);
@@ -41,6 +42,9 @@ void main_interrupt_handler(struct InterruptFrame frame) {
     switch (frame.int_number) {
         case PIC1_OFFSET + IRQ_KEYBOARD:
             keyboard_isr();
+            break;
+        case 14: // Page Fault Exception (Vector 0x0E)
+            page_fault_handler();
             break;
         default:
             break;
