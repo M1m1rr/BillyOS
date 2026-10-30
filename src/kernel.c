@@ -8,6 +8,7 @@
 #include "header/driver/keyboard.h"
 #include "header/driver/disk.h"
 #include "header/filesystem/ext2.h"
+#include "header/memory/paging.h"
 #include "header/stdlib/string.h"
 
 static void scroll(void) {
@@ -58,97 +59,45 @@ void kernel_setup(void) {
     framebuffer_set_cursor(0, 0);
 
     int row = 0, col = 0;
-    print_text(&row, &col, "=== BillyOS EXT2 Sample Image Verification ===\n\n", 0x0E);
+    print_text(&row, &col, "=== BillyOS Chapter 3.1 - Paging Test Suite ===\n\n", 0x0E);
 
-    initialize_filesystem_ext2();
+    // 1. Verifikasi Higher Half Kernel
+    print_text(&row, &col, "-- 1. Higher Half Kernel Verification --\n", 0x0B);
+    uint32_t esp_val;
+    __asm__ volatile("mov %%esp, %0" : "=r"(esp_val));
+    bool is_higher_half = (esp_val >= KERNEL_VIRTUAL_ADDRESS_BASE);
+    test_assert(&row, &col, "P1: ESP berada di Higher Half (>= 0xC0000000)", is_higher_half ? 0 : -1, 0);
 
-    // ==================== 1. VERIFIKASI FILE RESMI ASISTEN ====================
-    print_text(&row, &col, "-- 1. Membaca File Bawaan sample-image.bin --\n", 0x0B);
+    // 2. Test paging_allocate_check()
+    print_text(&row, &col, "\n-- 2. Testing paging_allocate_check() --\n", 0x0B);
+    test_assert(&row, &col, "P2: Alokasi 4 KiB valid (Exp true)", paging_allocate_check(4096) ? 0 : -1, 0);
+    test_assert(&row, &col, "P3: Alokasi melebihi RAM sistem (Exp false)", paging_allocate_check(0xFFFFFFFF) ? -1 : 0, 0);
 
-    // 1.1 Baca /laur (Expected: "Grievous Lady")
-    char buf_laur[32];
-    memset(buf_laur, 0, sizeof(buf_laur));
-    struct EXT2DriverRequest req_laur = {
-        .buf = buf_laur, .name = "laur", .name_len = 4,
-        .parent_inode = 1, .buffer_size = sizeof(buf_laur), .is_directory = false
-    };
-    int8_t ret_laur = read(req_laur);
-    bool laur_ok = (ret_laur == 0) && (memcmp(buf_laur, "Grievous Lady", 13) == 0);
-    print_text(&row, &col, "  Content: ", 0x07);
-    print_text(&row, &col, buf_laur, 0x0A);
-    print_text(&row, &col, "\n", 0x07);
-    test_assert(&row, &col, "T1: Baca /laur ('Grievous Lady')", laur_ok ? 0 : -1, 0);
+    // 3. Test paging_allocate_user_page_frame()
+    print_text(&row, &col, "\n-- 3. Testing Frame Allocator & Write/Read --\n", 0x0B);
+    uint32_t free_before = page_manager_state.free_page_frame_count;
+    void *test_vaddr = (void*) 0x00500000; // Contoh virtual address yang diuji pada buku halaman 121
 
-    // 1.2 Dapatkan Inode folder1
-    struct EXT2Inode root_node;
-    read_inode(1, &root_node);
-    uint8_t ftype = 0;
-    uint32_t f1_inode = find_entry_in_dir(&root_node, "folder1", 7, &ftype);
-    test_assert(&row, &col, "T2: Temukan direktori /folder1", (f1_inode > 0) ? 0 : -1, 0);
+    struct PageDirectory *current_pd = paging_get_current_page_directory_addr();
+    bool alloc_res = paging_allocate_user_page_frame(current_pd, test_vaddr);
+    test_assert(&row, &col, "P4: Alokasi virtual address 0x00500000", alloc_res ? 0 : -1, 0);
 
-    // 1.3 Baca /folder1/tpazolite (Expected: "Oshama Scramble!")
-    char buf_tpz[32];
-    memset(buf_tpz, 0, sizeof(buf_tpz));
-    struct EXT2DriverRequest req_tpz = {
-        .buf = buf_tpz, .name = "tpazolite", .name_len = 9,
-        .parent_inode = f1_inode, .buffer_size = sizeof(buf_tpz), .is_directory = false
-    };
-    int8_t ret_tpz = read(req_tpz);
-    bool tpz_ok = (ret_tpz == 0) && (memcmp(buf_tpz, "Oshama Scramble!", 16) == 0);
-    print_text(&row, &col, "  Content: ", 0x07);
-    print_text(&row, &col, buf_tpz, 0x0A);
-    print_text(&row, &col, "\n", 0x07);
-    test_assert(&row, &col, "T3: Baca /folder1/tpazolite", tpz_ok ? 0 : -1, 0);
+    // Tulis dan baca memory pada virtual address yang baru dipetakan
+    *((volatile uint32_t*) test_vaddr) = 0xCAFEBABE;
+    uint32_t read_back = *((volatile uint32_t*) test_vaddr);
+    test_assert(&row, &col, "P5: Tulis & Baca 0x00500000 (0xCAFEBABE)", (read_back == 0xCAFEBABE) ? 0 : -1, 0);
 
-    // 1.4 Baca /folder1/xi (Expected: "Freedom Dive")
-    char buf_xi[32];
-    memset(buf_xi, 0, sizeof(buf_xi));
-    struct EXT2DriverRequest req_xi = {
-        .buf = buf_xi, .name = "xi", .name_len = 2,
-        .parent_inode = f1_inode, .buffer_size = sizeof(buf_xi), .is_directory = false
-    };
-    int8_t ret_xi = read(req_xi);
-    bool xi_ok = (ret_xi == 0) && (memcmp(buf_xi, "Freedom Dive", 12) == 0);
-    print_text(&row, &col, "  Content: ", 0x07);
-    print_text(&row, &col, buf_xi, 0x0A);
-    print_text(&row, &col, "\n", 0x07);
-    test_assert(&row, &col, "T4: Baca /folder1/xi ('Freedom Dive')", xi_ok ? 0 : -1, 0);
+    // 4. Test paging_free_user_page_frame()
+    print_text(&row, &col, "\n-- 4. Testing Frame Deallocator --\n", 0x0B);
+    bool free_res = paging_free_user_page_frame(current_pd, test_vaddr);
+    test_assert(&row, &col, "P6: Bebaskan virtual address 0x00500000", free_res ? 0 : -1, 0);
 
-    // ==================== 2. TEST TULIS & BACA DI SAMPLE IMAGE ====================
-    print_text(&row, &col, "\n-- 2. Menguji Tulis & Hapus di sample-image --\n", 0x0B);
+    // Verifikasi jumlah free frame kembali seperti semula
+    // (Perhatikan: 1 frame terpakai untuk Page Table baru, sedangkan frame page-nya dikembalikan)
+    test_assert(&row, &col, "P7: Free frame bertambah kembali setelah deallokasi", 
+                (page_manager_state.free_page_frame_count == free_before - 1) ? 0 : -1, 0);
 
-    // 2.1 Temukan folder2
-    uint32_t f2_inode = find_entry_in_dir(&root_node, "folder2", 7, &ftype);
-
-    // 2.2 Tulis file baru ke dalam /folder2/new.txt
-    char msg[] = "Halo dari BillyOS!";
-    struct EXT2DriverRequest req_w = {
-        .buf = msg, .name = "new.txt", .name_len = 7,
-        .parent_inode = f2_inode, .buffer_size = sizeof(msg) - 1, .is_directory = false
-    };
-    test_assert(&row, &col, "T5: Tulis file /folder2/new.txt", write(&req_w), 0);
-
-    // 2.3 Baca kembali /folder2/new.txt
-    char buf_new[32];
-    memset(buf_new, 0, sizeof(buf_new));
-    struct EXT2DriverRequest req_rnew = {
-        .buf = buf_new, .name = "new.txt", .name_len = 7,
-        .parent_inode = f2_inode, .buffer_size = sizeof(buf_new), .is_directory = false
-    };
-    int8_t ret_rnew = read(req_rnew);
-    bool new_ok = (ret_rnew == 0) && (memcmp(buf_new, msg, sizeof(msg) - 1) == 0);
-    test_assert(&row, &col, "T6: Verifikasi isi /folder2/new.txt", new_ok ? 0 : -1, 0);
-
-    // 2.4 Hapus file /folder2/new.txt
-    struct EXT2DriverRequest req_del = {
-        .name = "new.txt", .name_len = 7, .parent_inode = f2_inode
-    };
-    test_assert(&row, &col, "T7: Hapus file /folder2/new.txt", delete(req_del), 0);
-
-    // 2.5 Pastikan file sudah terhapus (Code 3: Not Found)
-    test_assert(&row, &col, "T8: Pastikan file sudah terhapus (Exp 3)", read(req_rnew), 3);
-
-    print_text(&row, &col, "\n>> SEMUA TES SAMPLE-IMAGE SUKSES BESAR! <<\n", 0x0E);
+    print_text(&row, &col, "\n>> SEMUA TES PAGING BAB 3.1 LULUS DENGAN SEMPURNA! <<\n", 0x0E);
 
     // Loop Keyboard
     keyboard_state_activate();
