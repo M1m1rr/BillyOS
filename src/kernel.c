@@ -161,7 +161,39 @@ void kernel_setup(void) {
     ext2_set_current_directory(1);
     test_assert(&row, &col, "A3: Hapus active_dir setelah keluar CWD (Exp 0)", delete(req_del_cwd), 0);
 
-    // ==================== 3. LOOP KEYBOARD (PALING AKHIR) ====================
+        // ==================== 4. LAUNCHING USER MODE (Bab 3.3.5) ====================
+    print_text(&row, &col, "\n-- Launching User Mode (Bab 3.3) --\n", 0x0B);
+
+    // 1. Install & pasang Task State Segment (TSS) ke register TR
+    gdt_install_tss();
+    set_tss_register();
+
+    // 2. Alokasikan page frame virtual memory untuk user program di 0x00000000 dan user stack di 0x003FF000
+    current_pd = paging_get_current_page_directory_addr();
+    paging_allocate_user_page_frame(current_pd, (void*) 0x00000000);
+    paging_allocate_user_page_frame(current_pd, (void*) 0x003FF000);
+
+    // 3. Baca binary program "shell" dari storage EXT2 ke alamat virtual 0x00000000
+    struct EXT2DriverRequest req_shell = {
+        .buf          = (void*) 0x00000000,
+        .name         = "shell",
+        .name_len     = 5,
+        .parent_inode = 1,
+        .buffer_size  = 0x100000,
+        .is_directory = false
+    };
+    int8_t read_shell_res = read(req_shell);
+    test_assert(&row, &col, "U1: Baca binary shell dari storage (Exp 0)", read_shell_res, 0);
+
+    print_text(&row, &col, "U2: Melompat ke User Mode (Ring 3)...\n", 0x0E);
+
+    // 4. Perbarui pointer stack kernel pada TSS
+    set_tss_kernel_current_stack();
+
+    // 5. Lompat ke User Mode dan mulai eksekusi shell di 0x00000000!
+    kernel_execute_user_program((void*) 0x00000000);
+
+    // ==================== LOOP KEYBOARD (PALING AKHIR) ====================
     keyboard_state_activate();
     while (true) {
         char c;

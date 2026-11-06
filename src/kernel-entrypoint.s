@@ -1,6 +1,7 @@
 global loader                        ; the entry symbol for ELF
 global load_gdt                      ; load GDT table
 global set_tss_register              ; set tss register to GDT entry
+global kernel_execute_user_program
 extern kernel_setup                  ; kernel C entrypoint
 extern _paging_kernel_page_directory ; kernel page directory
 extern _paging_kernel_page_table     ; kernel page table
@@ -103,3 +104,25 @@ set_tss_register:
     mov ax, 0x28 | 0 ; GDT TSS Selector, ring 0
     ltr ax
     ret
+
+kernel_execute_user_program:
+    mov  eax, 0x20 | 0x3     ; GDT_USER_DATA_SEGMENT_SELECTOR dengan RPL 3
+    mov  ds, ax
+    mov  es, ax
+    mov  fs, ax
+    mov  gs, ax
+    
+    ; Menyusun stack frame untuk perpindahan privilege via iret:
+    ; Urutan stack: [esp] -> eip, [esp+4] -> cs, [esp+8] -> eflags, [esp+12] -> esp, [esp+16] -> ss
+    mov  ecx, [esp+4]        ; Simpan virtual_addr target program
+    push eax                 ; User SS: 0x23 (Data selector RPL 3)
+    mov  eax, ecx
+    add  eax, 0x400000 - 4   ; User ESP: posisikan di puncak 4 MiB
+    push eax                 ; User ESP
+    pushf                    ; EFLAGS saat ini
+    mov  eax, 0x18 | 0x3     ; User CS: 0x1B (Code selector RPL 3)
+    push eax                 ; User CS
+    mov  eax, ecx
+    push eax                 ; User EIP (alamat awal user program)
+
+    iret                     ; Eksekusi iret untuk melompat ke Ring 3!

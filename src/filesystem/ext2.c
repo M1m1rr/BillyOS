@@ -283,7 +283,7 @@ int8_t read_directory(struct EXT2DriverRequest *prequest) {
 }
 
 int8_t read(struct EXT2DriverRequest request) {
-    if (!request.buf) return -1;
+    if (request.buffer_size == 0) return -1;
     if (request.parent_inode == 0 || request.parent_inode > fs_superblock.s_inodes_count) return 4;
 
     // 1. Validasi parent folder

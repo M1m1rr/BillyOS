@@ -154,4 +154,15 @@ void pic_remap(void);
  */
 void main_interrupt_handler(struct InterruptFrame frame);
 
+struct TSSEntry {
+    uint32_t prev_tss; 
+    uint32_t esp0;     
+    uint32_t ss0;      
+    uint32_t unused_register[23];
+} __attribute__((packed));
+
+extern struct TSSEntry _interrupt_tss_entry;
+
+void set_tss_kernel_current_stack(void);
+
 #endif
