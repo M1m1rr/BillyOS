@@ -59,48 +59,109 @@ void kernel_setup(void) {
     framebuffer_clear();
     framebuffer_set_cursor(0, 0);
 
-    int row = 0, col = 0;
-    print_text(&row, &col, "=== BillyOS Chapter 3.1 - Paging Test Suite ===\n\n", 0x0E);
+    initialize_filesystem_ext2();
 
-    // 1. Verifikasi Higher Half Kernel
+    int row = 0, col = 0;
+    print_text(&row, &col, "=== BillyOS Paging & Swap Test Suite ===\n\n", 0x0E);
+
+    // ==================== 1. TES PAGING (Bab 3.1) ====================
     print_text(&row, &col, "-- 1. Higher Half Kernel Verification --\n", 0x0B);
     uint32_t esp_val;
     __asm__ volatile("mov %%esp, %0" : "=r"(esp_val));
     bool is_higher_half = (esp_val >= KERNEL_VIRTUAL_ADDRESS_BASE);
     test_assert(&row, &col, "P1: ESP berada di Higher Half (>= 0xC0000000)", is_higher_half ? 0 : -1, 0);
 
-    // 2. Test paging_allocate_check()
     print_text(&row, &col, "\n-- 2. Testing paging_allocate_check() --\n", 0x0B);
     test_assert(&row, &col, "P2: Alokasi 4 KiB valid (Exp true)", paging_allocate_check(4096) ? 0 : -1, 0);
     test_assert(&row, &col, "P3: Alokasi melebihi RAM sistem (Exp false)", paging_allocate_check(0xFFFFFFFF) ? -1 : 0, 0);
 
-    // 3. Test paging_allocate_user_page_frame()
     print_text(&row, &col, "\n-- 3. Testing Frame Allocator & Write/Read --\n", 0x0B);
     uint32_t free_before = page_manager_state.free_page_frame_count;
-    void *test_vaddr = (void*) 0x00500000; // Contoh virtual address yang diuji pada buku halaman 121
+    void *test_vaddr = (void*) 0x00500000;
 
     struct PageDirectory *current_pd = paging_get_current_page_directory_addr();
     bool alloc_res = paging_allocate_user_page_frame(current_pd, test_vaddr);
     test_assert(&row, &col, "P4: Alokasi virtual address 0x00500000", alloc_res ? 0 : -1, 0);
 
-    // Tulis dan baca memory pada virtual address yang baru dipetakan
     *((volatile uint32_t*) test_vaddr) = 0xCAFEBABE;
     uint32_t read_back = *((volatile uint32_t*) test_vaddr);
     test_assert(&row, &col, "P5: Tulis & Baca 0x00500000 (0xCAFEBABE)", (read_back == 0xCAFEBABE) ? 0 : -1, 0);
 
-    // 4. Test paging_free_user_page_frame()
     print_text(&row, &col, "\n-- 4. Testing Frame Deallocator --\n", 0x0B);
     bool free_res = paging_free_user_page_frame(current_pd, test_vaddr);
     test_assert(&row, &col, "P6: Bebaskan virtual address 0x00500000", free_res ? 0 : -1, 0);
 
-    // Verifikasi jumlah free frame kembali seperti semula
-    // (Perhatikan: 1 frame terpakai untuk Page Table baru, sedangkan frame page-nya dikembalikan)
     test_assert(&row, &col, "P7: Free frame bertambah kembali setelah deallokasi", 
                 (page_manager_state.free_page_frame_count == free_before - 1) ? 0 : -1, 0);
 
-    print_text(&row, &col, "\n>> SEMUA TES PAGING BAB 3.1 LULUS DENGAN SEMPURNA! <<\n", 0x0E);
+    // ==================== 2. TES SWAP SPACE (Bab 3.2) ====================
+    print_text(&row, &col, "\n-- 5. Testing Swap Space (Bab 3.2) --\n", 0x0B);
 
-    // Loop Keyboard
+    swap_init();
+
+    // 5.1 Alokasikan page dan tulis data unik
+    void *swap_test_vaddr = (void*) 0x00600000;
+    paging_allocate_user_page_frame(current_pd, swap_test_vaddr);
+    *((volatile uint32_t*) swap_test_vaddr) = 0x12345678;
+
+    // 5.2 Lakukan Swap Out ke disk
+    bool swap_out_res = swap_out_page(current_pd, swap_test_vaddr);
+    test_assert(&row, &col, "S1: Swap out page ke disk", swap_out_res ? 0 : -1, 0);
+
+    // 5.3 Cek apakah slot swap di disk terpakai
+    test_assert(&row, &col, "S2: Slot swap berkurang di disk", 
+                (swap_manager_state.free_slots_count == SWAP_MAX_PAGES - 1) ? 0 : -1, 0);
+
+    // 5.4 Akses kembali memory tersebut!
+    // Karena page di-swap out (present=0), baris ini memicu Page Fault (Vector 14).
+    // Handler page_fault_handler() akan otomatis melakukan Swap In dari disk!
+    uint32_t restored_val = *((volatile uint32_t*) swap_test_vaddr);
+    test_assert(&row, &col, "S3: Page Fault otomatis Swap In & Data Cocok", 
+                (restored_val == 0x12345678) ? 0 : -1, 0);
+
+    // 5.5 Cek slot swap kembali bebas
+    test_assert(&row, &col, "S4: Slot swap kembali bebas setelah Swap In", 
+                (swap_manager_state.free_slots_count == SWAP_MAX_PAGES) ? 0 : -1, 0);
+
+    print_text(&row, &col, "\n>> SEMUA TES PAGING & SWAP LULUS! <<\n", 0x0E);
+
+        // ==================== TES KHUSUS ASISTENSI ====================
+    print_text(&row, &col, "\n-- Asistensi: Proteksi Hapus Root & CWD --\n", 0x0B);
+
+    // A1. Coba hapus entri '.' di root (Exp -1)
+    struct EXT2DriverRequest req_del_dot = {
+        .name = ".", .name_len = 1, .parent_inode = 1
+    };
+    test_assert(&row, &col, "A1: Tolak hapus '.' (Exp -1)", delete(req_del_dot), -1);
+
+    // A2. Coba hapus folder tempat kita sedang berada (CWD)
+    // Misalnya buat folder dummy /active_dir
+    struct EXT2DriverRequest req_mkdir = {
+        .name = "active_dir", .name_len = 10, .parent_inode = 1,
+        .buffer_size = 0, .is_directory = true
+    };
+    write(&req_mkdir);
+
+    // Cari inode active_dir
+    struct EXT2Inode root_inode_tmp;
+    read_inode(1, &root_inode_tmp);
+    uint8_t dummy_ftype;
+    uint32_t active_inode = find_entry_in_dir(&root_inode_tmp, "active_dir", 10, &dummy_ftype);
+
+    // Simulasikan pengguna sedang berada di dalam active_dir (cd active_dir)
+    ext2_set_current_directory(active_inode);
+
+    // Coba hapus active_dir dari parent (root) saat kita masih di dalamnya
+    struct EXT2DriverRequest req_del_cwd = {
+        .name = "active_dir", .name_len = 10, .parent_inode = 1
+    };
+    test_assert(&row, &col, "A2: Tolak hapus folder aktif / CWD (Exp -1)", delete(req_del_cwd), -1);
+
+    // Kembalikan CWD ke root, sekarang folder active_dir boleh dihapus
+    ext2_set_current_directory(1);
+    test_assert(&row, &col, "A3: Hapus active_dir setelah keluar CWD (Exp 0)", delete(req_del_cwd), 0);
+
+    // ==================== 3. LOOP KEYBOARD (PALING AKHIR) ====================
     keyboard_state_activate();
     while (true) {
         char c;
@@ -129,35 +190,4 @@ void kernel_setup(void) {
             framebuffer_set_cursor(row, col);
         }
     }
-
-        // ==================== 5. TEST SWAP SPACE (Bab 3.2) ====================
-    print_text(&row, &col, "\n-- 5. Testing Swap Space (Bab 3.2) --\n", 0x0B);
-
-    swap_init();
-
-    // 5.1 Alokasikan page dan tulis data unik
-    void *swap_test_vaddr = (void*) 0x00600000;
-    paging_allocate_user_page_frame(current_pd, swap_test_vaddr);
-    *((volatile uint32_t*) swap_test_vaddr) = 0x12345678;
-
-    // 5.2 Lakukan Swap Out ke disk
-    bool swap_out_res = swap_out_page(current_pd, swap_test_vaddr);
-    test_assert(&row, &col, "S1: Swap out page ke disk", swap_out_res ? 0 : -1, 0);
-
-    // 5.3 Cek apakah slot swap terpakai
-    test_assert(&row, &col, "S2: Slot swap berkurang di disk", 
-                (swap_manager_state.free_slots_count == SWAP_MAX_PAGES - 1) ? 0 : -1, 0);
-
-    // 5.4 Akses kembali memory tersebut!
-    // Karena page di-swap out (present=0), baris ini memicu Page Fault (Vector 14).
-    // Handler page_fault_handler() akan otomatis melakukan Swap In dari disk!
-    uint32_t restored_val = *((volatile uint32_t*) swap_test_vaddr);
-    test_assert(&row, &col, "S3: Page Fault otomatis Swap In & Data Cocok", 
-                (restored_val == 0x12345678) ? 0 : -1, 0);
-
-    // 5.5 Cek slot swap kembali bebas
-    test_assert(&row, &col, "S4: Slot swap kembali bebas setelah Swap In", 
-                (swap_manager_state.free_slots_count == SWAP_MAX_PAGES) ? 0 : -1, 0);
-
-    print_text(&row, &col, "\n>> SEMUA TES SWAP SPACE BAB 3.2 BERHASIL! <<\n", 0x0E);
 }

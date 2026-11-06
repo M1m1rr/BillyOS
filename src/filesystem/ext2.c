@@ -15,8 +15,24 @@ const uint8_t fs_signature[BLOCK_SIZE] = {
 };
 
 // State filesystem yang di-cache pada RAM (Volatile Memory)
+// Diberi padding dan __attribute__((unused)) agar tidak memicu error compiler -Werror=unused-variable
 static struct EXT2Superblock fs_superblock;
+static uint8_t _pad_superblock[BLOCK_SIZE - sizeof(struct EXT2Superblock)] __attribute__((unused));
+
 static struct EXT2BlockGroupDescriptorTable fs_bgd_table;
+static uint8_t _pad_bgd_table[BLOCK_SIZE - sizeof(struct EXT2BlockGroupDescriptorTable)] __attribute__((unused));
+
+static uint32_t ext2_cwd_inode = 1;
+
+void ext2_set_current_directory(uint32_t inode) {
+    if (inode > 0 && inode <= fs_superblock.s_inodes_count) {
+        ext2_cwd_inode = inode;
+    }
+}
+
+uint32_t ext2_get_current_directory(void) {
+    return ext2_cwd_inode;
+}
 
 // Helper: konversi inode global (1-indexed) ke nomor Block Group (0-indexed)
 uint32_t inode_to_bgd(uint32_t inode) {
@@ -222,8 +238,12 @@ void initialize_filesystem_ext2(void) {
     if (is_empty_storage()) {
         create_ext2();
     } else {
-        read_blocks(&fs_superblock, 1, 1);
-        read_blocks(&fs_bgd_table, 2, 1);
+        struct BlockBuffer b;
+        read_blocks(&b, 1, 1);
+        memcpy(&fs_superblock, b.buf, sizeof(struct EXT2Superblock));
+
+        read_blocks(&b, 2, 1);
+        memcpy(&fs_bgd_table, b.buf, sizeof(struct EXT2BlockGroupDescriptorTable));
     }
 }
 
@@ -500,6 +520,12 @@ int8_t write(struct EXT2DriverRequest *request) {
 int8_t delete(struct EXT2DriverRequest request) {
     if (request.parent_inode == 0 || request.parent_inode > fs_superblock.s_inodes_count) return 3;
 
+    // --- PROTEKSI 1: Tidak boleh menghapus entri navigasi '.' atau '..' ---
+    if ((request.name_len == 1 && request.name[0] == '.') ||
+        (request.name_len == 2 && request.name[0] == '.' && request.name[1] == '.')) {
+        return -1; // Ditolak
+    }
+
     // 1. Validasi parent folder
     struct EXT2Inode parent_node;
     read_inode(request.parent_inode, &parent_node);
@@ -535,6 +561,17 @@ int8_t delete(struct EXT2DriverRequest request) {
     }
 
     uint32_t target_inode_num = target_entry->inode;
+
+    // --- PROTEKSI 2: Tidak boleh menghapus Root Directory (Inode 1) ---
+    if (target_inode_num == 1) {
+        return -1; // Ditolak karena fatal!
+    }
+
+    // --- PROTEKSI 3: Tidak boleh menghapus direktori yang sedang ditempati (CWD) ---
+    if (target_inode_num == ext2_cwd_inode) {
+        return -1; // Ditolak karena direktori sedang aktif digunakan!
+    }
+
     struct EXT2Inode target_node;
     read_inode(target_inode_num, &target_node);
 
@@ -562,7 +599,7 @@ int8_t delete(struct EXT2DriverRequest request) {
     if (prev_entry) {
         prev_entry->rec_len += target_entry->rec_len;
     } else {
-        target_entry->inode = 0; // Jika entri pertama
+        target_entry->inode = 0;
     }
     write_blocks(&b, parent_node.i_block[0], 1);
 
@@ -576,7 +613,7 @@ int8_t delete(struct EXT2DriverRequest request) {
 
         struct BlockBuffer bm;
         read_blocks(&bm, fs_bgd_table.table[grp].bg_block_bitmap, 1);
-        bm.buf[bit_pos / 8] &= ~(1 << (bit_pos % 8)); // Bebaskan bit
+        bm.buf[bit_pos / 8] &= ~(1 << (bit_pos % 8));
         write_blocks(&bm, fs_bgd_table.table[grp].bg_block_bitmap, 1);
 
         fs_bgd_table.table[grp].bg_free_blocks_count++;
@@ -588,7 +625,7 @@ int8_t delete(struct EXT2DriverRequest request) {
     uint32_t bit_pos = inode_to_local(target_inode_num);
     struct BlockBuffer ibm;
     read_blocks(&ibm, fs_bgd_table.table[grp].bg_inode_bitmap, 1);
-    ibm.buf[bit_pos / 8] &= ~(1 << (bit_pos % 8)); // Bebaskan bit
+    ibm.buf[bit_pos / 8] &= ~(1 << (bit_pos % 8));
     write_blocks(&ibm, fs_bgd_table.table[grp].bg_inode_bitmap, 1);
 
     fs_bgd_table.table[grp].bg_free_inodes_count++;

@@ -285,6 +285,18 @@ void read_inode(uint32_t inode, struct EXT2Inode *out_node);
 uint32_t find_entry_in_dir(struct EXT2Inode *parent_node, const char *name, uint8_t name_len, uint8_t *out_file_type);
 
 /**
+ * @brief Mengatur direktori aktif saat ini (Current Working Directory)
+ * @param inode Nomor inode folder aktif
+ */
+void ext2_set_current_directory(uint32_t inode);
+
+/**
+ * @brief Mengambil nomor inode direktori aktif saat ini
+ * @return Nomor inode aktif
+ */
+uint32_t ext2_get_current_directory(void);
+
+/**
  * @brief check whether filesystem signature is missing or not in boot sector
  *
  * @return true if memcmp(boot_sector, fs_signature) returning inequality
