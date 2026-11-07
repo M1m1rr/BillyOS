@@ -191,8 +191,8 @@ void kernel_setup(void) {
     set_tss_kernel_current_stack();
 
     // 5. Lompat ke User Mode dan mulai eksekusi shell di 0x00000000!
+    console_set_position(row, col);
     kernel_execute_user_program((void*) 0x00000000);
-
     // ==================== LOOP KEYBOARD (PALING AKHIR) ====================
     keyboard_state_activate();
     while (true) {

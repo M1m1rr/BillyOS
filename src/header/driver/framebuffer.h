@@ -12,5 +12,8 @@
 void framebuffer_write(uint8_t row, uint8_t col, char c, uint8_t fg, uint8_t bg);
 void framebuffer_set_cursor(uint8_t r, uint8_t c);
 void framebuffer_clear(void);
+void console_set_position(uint32_t row, uint32_t col);
+void console_putchar(char c, uint8_t color);
+void console_puts(const char *s, uint32_t len, uint8_t color);
 
 #endif
