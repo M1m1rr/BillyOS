@@ -170,7 +170,9 @@ void kernel_setup(void) {
 
     // 2. Alokasikan page frame virtual memory untuk user program di 0x00000000 dan user stack di 0x003FF000
     current_pd = paging_get_current_page_directory_addr();
-    paging_allocate_user_page_frame(current_pd, (void*) 0x00000000);
+    for (uint32_t i = 0; i < 4; i++) {
+        paging_allocate_user_page_frame(current_pd, (void*) (i * 0x1000));
+    }
     paging_allocate_user_page_frame(current_pd, (void*) 0x003FF000);
 
     // 3. Baca binary program "shell" dari storage EXT2 ke alamat virtual 0x00000000

@@ -120,6 +120,9 @@ kernel_execute_user_program:
     add  eax, 0x400000 - 4   ; User ESP: posisikan di puncak 4 MiB
     push eax                 ; User ESP
     pushf                    ; EFLAGS saat ini
+    pop  edx
+    or   edx, 0x200          ; Pastikan Interrupt Flag (IF bit 9) aktif di User Mode!
+    push edx
     mov  eax, 0x18 | 0x3     ; User CS: 0x1B (Code selector RPL 3)
     push eax                 ; User CS
     mov  eax, ecx

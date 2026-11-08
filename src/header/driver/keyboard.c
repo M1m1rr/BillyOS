@@ -42,6 +42,8 @@ void get_keyboard_buffer(char *buf) {
     keyboard_state.keyboard_buffer = 0;
 }
 
+static bool shift_active = false;
+
 void keyboard_isr(void) {
     uint8_t scancode = in(KEYBOARD_DATA_PORT);
 
@@ -51,11 +53,46 @@ void keyboard_isr(void) {
         return;
     }
 
+    // 1. Deteksi tombol Shift (Left Shift: 0x2A, Right Shift: 0x36)
+    if (scancode == 0x2A || scancode == 0x36) {
+        shift_active = true;
+        pic_ack(IRQ_KEYBOARD);
+        return;
+    }
+    // Deteksi saat tombol Shift dilepas (Break Code: bit 7 aktif)
+    if (scancode == (0x2A | 0x80) || scancode == (0x36 | 0x80)) {
+        shift_active = false;
+        pic_ack(IRQ_KEYBOARD);
+        return;
+    }
+
     if (keyboard_state.keyboard_input_on) {
         if (!(scancode & 0x80)) {
             if (!keyboard_state.read_extended_mode) {
                 char c = keyboard_scancode_1_to_ascii_map[scancode];
                 if (c) {
+                    // 2. Jika Shift aktif, ubah karakter ke simbol / huruf kapital
+                    if (shift_active) {
+                        if (c >= 'a' && c <= 'z') c -= 32;       // Huruf kapital A-Z
+                        else if (c == '\\') c = '|';             // Backslash menjadi Pipe '|'!
+                        else if (c == '1')  c = '!';
+                        else if (c == '2')  c = '@';
+                        else if (c == '3')  c = '#';
+                        else if (c == '4')  c = '$';
+                        else if (c == '5')  c = '%';
+                        else if (c == '6')  c = '^';
+                        else if (c == '7')  c = '&';
+                        else if (c == '8')  c = '*';
+                        else if (c == '9')  c = '(';
+                        else if (c == '0')  c = ')';
+                        else if (c == '-')  c = '_';             // Underscore '_'
+                        else if (c == '=')  c = '+';
+                        else if (c == ';')  c = ':';
+                        else if (c == '\'') c = '"';
+                        else if (c == ',')  c = '<';
+                        else if (c == '.')  c = '>';
+                        else if (c == '/')  c = '?';
+                    }
                     keyboard_state.keyboard_buffer = c;
                 }
             }

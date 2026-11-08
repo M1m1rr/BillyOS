@@ -3,9 +3,8 @@
 #include "header/filesystem/ext2.h"
 #include "header/stdlib/string.h"
 
-#define MAX_LINE_LEN     256
-#define MAX_ARGS         16
-#define PIPE_BUFFER_SIZE 4096
+#define MAX_LINE_LEN 128
+#define MAX_ARGS     16
 
 // ==================== 1. SYSCALL WRAPPERS ====================
 
@@ -31,507 +30,377 @@ static void sys_clear(void) {
     syscall(8, 0, 0, 0);
 }
 
-static int8_t sys_read_file(uint32_t parent_inode, const char *name, void *buf, uint32_t buf_size) {
+static int8_t sys_read_file(uint32_t parent, const char *name, void *buf, uint32_t size) {
     uint8_t nlen = 0;
     while (name[nlen]) nlen++;
-
     struct EXT2DriverRequest req = {
-        .buf          = buf,
-        .name         = (char*) name,
-        .name_len     = nlen,
-        .parent_inode = parent_inode,
-        .buffer_size  = buf_size,
-        .is_directory = false
+        .buf = buf, .name = (char*) name, .name_len = nlen,
+        .parent_inode = parent, .buffer_size = size, .is_directory = false
     };
-    int8_t retcode = -1;
-    syscall(0, (uint32_t) &req, (uint32_t) &retcode, 0);
-    return retcode;
+    int8_t ret = -1;
+    syscall(0, (uint32_t) &req, (uint32_t) &ret, 0);
+    return ret;
 }
 
-static int8_t sys_read_dir(uint32_t parent_inode, const char *name, void *buf) {
+static int8_t sys_read_dir(uint32_t parent, const char *name, void *buf) {
     uint8_t nlen = 0;
     while (name[nlen]) nlen++;
-
     struct EXT2DriverRequest req = {
-        .buf          = buf,
-        .name         = (char*) name,
-        .name_len     = nlen,
-        .parent_inode = parent_inode,
-        .buffer_size  = BLOCK_SIZE,
-        .is_directory = true
+        .buf = buf, .name = (char*) name, .name_len = nlen,
+        .parent_inode = parent, .buffer_size = BLOCK_SIZE, .is_directory = true
     };
-    int8_t retcode = -1;
-    syscall(1, (uint32_t) &req, (uint32_t) &retcode, 0);
-    return retcode;
+    int8_t ret = -1;
+    syscall(1, (uint32_t) &req, (uint32_t) &ret, 0);
+    return ret;
 }
 
-static int8_t sys_write_entry(uint32_t parent_inode, const char *name, void *buf, uint32_t size, bool is_dir) {
+static int8_t sys_write_entry(uint32_t parent, const char *name, void *buf, uint32_t size, bool is_dir) {
     uint8_t nlen = 0;
     while (name[nlen]) nlen++;
-
     struct EXT2DriverRequest req = {
-        .buf          = buf,
-        .name         = (char*) name,
-        .name_len     = nlen,
-        .parent_inode = parent_inode,
-        .buffer_size  = size,
-        .is_directory = is_dir
+        .buf = buf, .name = (char*) name, .name_len = nlen,
+        .parent_inode = parent, .buffer_size = size, .is_directory = is_dir
     };
-    int8_t retcode = -1;
-    syscall(2, (uint32_t) &req, (uint32_t) &retcode, 0);
-    return retcode;
+    int8_t ret = -1;
+    syscall(2, (uint32_t) &req, (uint32_t) &ret, 0);
+    return ret;
 }
 
-static int8_t sys_delete_entry(uint32_t parent_inode, const char *name) {
+static int8_t sys_delete_entry(uint32_t parent, const char *name) {
     uint8_t nlen = 0;
     while (name[nlen]) nlen++;
-
     struct EXT2DriverRequest req = {
-        .buf          = NULL,
-        .name         = (char*) name,
-        .name_len     = nlen,
-        .parent_inode = parent_inode,
-        .buffer_size  = 0,
-        .is_directory = false
+        .buf = NULL, .name = (char*) name, .name_len = nlen,
+        .parent_inode = parent, .buffer_size = 0, .is_directory = false
     };
-    int8_t retcode = -1;
-    syscall(3, (uint32_t) &req, (uint32_t) &retcode, 0);
-    return retcode;
+    int8_t ret = -1;
+    syscall(3, (uint32_t) &req, (uint32_t) &ret, 0);
+    return ret;
 }
 
 // ==================== 2. HELPER STRING ====================
 
 static uint32_t str_len(const char *s) {
-    uint32_t len = 0;
-    while (s[len]) len++;
-    return len;
+    uint32_t l = 0;
+    while (s[l]) l++;
+    return l;
 }
 
 static int str_cmp(const char *s1, const char *s2) {
-    while (*s1 && (*s1 == *s2)) {
-        s1++;
-        s2++;
-    }
+    while (*s1 && (*s1 == *s2)) { s1++; s2++; }
     return *(const unsigned char*)s1 - *(const unsigned char*)s2;
 }
 
-static void str_cpy(char *dest, const char *src) {
-    while ((*dest++ = *src++));
+static void str_cpy(char *d, const char *s) {
+    while ((*d++ = *s++));
 }
 
-static char* str_find(const char *haystack, const char *needle) {
-    if (!*needle) return (char*) haystack;
-    for (; *haystack; haystack++) {
-        if (*haystack == *needle) {
-            const char *h = haystack, *n = needle;
-            while (*h && *n && (*h == *n)) {
-                h++;
-                n++;
-            }
-            if (!*n) return (char*) haystack;
+static char* str_find(const char *h, const char *n) {
+    if (!*n) return (char*) h;
+    for (; *h; h++) {
+        if (*h == *n) {
+            const char *h1 = h, *n1 = n;
+            while (*h1 && *n1 && (*h1 == *n1)) { h1++; n1++; }
+            if (!*n1) return (char*) h;
         }
     }
     return NULL;
 }
 
-// ==================== 3. STATE SHELL & PIPELINE ====================
+// ==================== 3. STATE SHELL & SHARED BUFFER ====================
 
-static uint32_t cwd_inode = 1;          // Inode root BillyOS = 1
-static char     cwd_path[128] = "/";     // Path CWD
+static uint32_t cwd_inode = 1;
+static char     cwd_path[64] = "/";
 
-static bool pipe_capture_mode = false;
-static char pipe_buffer[PIPE_BUFFER_SIZE];
-static uint32_t pipe_buffer_len = 0;
+static uint8_t  sh_buf[1024];       // Buffer bersama untuk file operations
+static char     pipe_buf[1024];     // Buffer pipeline
+static uint32_t pipe_len = 0;
+static bool     pipe_mode = false;
 
 static void shell_print(const char *str, uint8_t color) {
-    if (pipe_capture_mode) {
-        uint32_t len = str_len(str);
-        if (pipe_buffer_len + len < PIPE_BUFFER_SIZE - 1) {
-            memcpy(pipe_buffer + pipe_buffer_len, str, len);
-            pipe_buffer_len += len;
-            pipe_buffer[pipe_buffer_len] = '\0';
+    if (pipe_mode) {
+        uint32_t l = str_len(str);
+        if (pipe_len + l < sizeof(pipe_buf) - 1) {
+            memcpy(pipe_buf + pipe_len, str, l);
+            pipe_len += l;
+            pipe_buf[pipe_len] = '\0';
         }
     } else {
         sys_puts(str, color);
     }
 }
 
-// ==================== 4. IMPLEMENTASI COMMAND ====================
+// ==================== 4. COMMAND IMPLEMENTATION ====================
 
-// --- COMMAND: HELP ---
-static void cmd_help(int argc, char *argv[]) {
-    (void) argc; (void) argv;
-    shell_print("BillyOS Shell Commands:\n", 0x0E);
-    shell_print("  cd <dir>         : Ganti direktori (termasuk '..' dan '/')\n", 0x07);
-    shell_print("  ls [dir]         : Tampilkan daftar file & direktori\n", 0x07);
-    shell_print("  mkdir <dir>      : Buat direktori baru\n", 0x07);
-    shell_print("  cat <file>       : Tampilkan isi file teks\n", 0x07);
-    shell_print("  cp <src> <dst>   : Salin file\n", 0x07);
-    shell_print("  rm <file/dir>    : Hapus file atau folder kosong\n", 0x07);
-    shell_print("  mv <src> <dst>   : Pindah atau ubah nama file\n", 0x07);
-    shell_print("  find <name>      : Cari file/folder secara rekursif\n", 0x07);
-    shell_print("  grep <pattern>   : Cari teks (bisa via pipeline |)\n", 0x07);
-    shell_print("  clear            : Bersihkan layar\n", 0x07);
-    shell_print("  help             : Tampilkan bantuan ini\n", 0x07);
+static void cmd_help(void) {
+    shell_print("Perintah: cd, ls, mkdir, cat, cp, rm, mv, find, grep, clear, help\n", 0x0E);
+    shell_print("Contoh: cd folder1 | ls | cat file | ls | grep test\n", 0x07);
 }
 
-// --- COMMAND: CLEAR ---
-static void cmd_clear(int argc, char *argv[]) {
-    (void) argc; (void) argv;
-    sys_clear();
-}
-
-// --- COMMAND: LS ---
 static void cmd_ls(int argc, char *argv[]) {
-    const char *target_dir = (argc > 1) ? argv[1] : ".";
-    uint8_t dir_buf[BLOCK_SIZE];
-    memset(dir_buf, 0, BLOCK_SIZE);
+    const char *target = (argc > 1) ? argv[1] : ".";
+    uint8_t d_buf[BLOCK_SIZE];
+    memset(d_buf, 0, BLOCK_SIZE);
 
-    int8_t ret = sys_read_dir(cwd_inode, target_dir, dir_buf);
-    if (ret != 0) {
-        shell_print("ls: Direktori tidak ditemukan!\n", 0x0C);
+    if (sys_read_dir(cwd_inode, target, d_buf) != 0) {
+        shell_print("ls: Direktori tidak ditemukan\n", 0x0C);
         return;
     }
 
-    uint32_t offset = 0;
-    while (offset < BLOCK_SIZE) {
-        struct EXT2DirectoryEntry *entry = (struct EXT2DirectoryEntry *) (dir_buf + offset);
-        if (entry->rec_len == 0) break;
+    uint32_t off = 0;
+    while (off < BLOCK_SIZE) {
+        struct EXT2DirectoryEntry *e = (struct EXT2DirectoryEntry *)(d_buf + off);
+        if (e->rec_len == 0) break;
+        if (e->inode != 0) {
+            char name[64];
+            uint8_t len = (e->name_len < 63) ? e->name_len : 63;
+            memcpy(name, (char*)e + sizeof(struct EXT2DirectoryEntry), len);
+            name[len] = '\0';
 
-        if (entry->inode != 0) {
-            char name_buf[64];
-            uint8_t nlen = (entry->name_len < 63) ? entry->name_len : 63;
-            memcpy(name_buf, (char*)entry + sizeof(struct EXT2DirectoryEntry), nlen);
-            name_buf[nlen] = '\0';
-
-            if (entry->file_type == EXT2_FT_DIR) {
-                shell_print(name_buf, 0x0B); // Biru muda untuk folder
-                shell_print("/  ", 0x0B);
+            if (pipe_mode) {
+                shell_print(name, 0x0F);
+                shell_print("\n", 0x0F); // Satu baris per file untuk input grep
             } else {
-                shell_print(name_buf, 0x0F); // Putih untuk file biasa
-                shell_print("  ", 0x0F);
+                if (e->file_type == EXT2_FT_DIR) {
+                    shell_print(name, 0x0B);
+                    shell_print("/  ", 0x0B);
+                } else {
+                    shell_print(name, 0x0F);
+                    shell_print("  ", 0x0F);
+                }
             }
         }
-        offset += entry->rec_len;
+        off += e->rec_len;
     }
-    shell_print("\n", 0x0F);
+    if (!pipe_mode) shell_print("\n", 0x0F);
 }
 
-// --- COMMAND: CD ---
 static void cmd_cd(int argc, char *argv[]) {
-    if (argc < 2) {
-        // Tanpa argumen: kembali ke root
+    if (argc < 2 || str_cmp(argv[1], "/") == 0) {
         cwd_inode = 1;
         str_cpy(cwd_path, "/");
         return;
     }
+    if (str_cmp(argv[1], ".") == 0) return;
 
-    const char *target = argv[1];
-    if (str_cmp(target, "/") == 0) {
-        cwd_inode = 1;
-        str_cpy(cwd_path, "/");
-        return;
-    }
-    if (str_cmp(target, ".") == 0) return;
+    uint8_t d_buf[BLOCK_SIZE];
+    if (sys_read_dir(cwd_inode, ".", d_buf) != 0) return;
 
-    uint8_t dir_buf[BLOCK_SIZE];
-    if (sys_read_dir(cwd_inode, ".", dir_buf) != 0) {
-        shell_print("cd: Gagal membaca direktori aktif\n", 0x0C);
-        return;
-    }
-
-    uint32_t offset = 0;
+    uint32_t off = 0;
     bool found = false;
-    while (offset < BLOCK_SIZE) {
-        struct EXT2DirectoryEntry *entry = (struct EXT2DirectoryEntry *) (dir_buf + offset);
-        if (entry->rec_len == 0) break;
+    while (off < BLOCK_SIZE) {
+        struct EXT2DirectoryEntry *e = (struct EXT2DirectoryEntry *)(d_buf + off);
+        if (e->rec_len == 0) break;
+        if (e->inode != 0) {
+            char name[64];
+            uint8_t len = (e->name_len < 63) ? e->name_len : 63;
+            memcpy(name, (char*)e + sizeof(struct EXT2DirectoryEntry), len);
+            name[len] = '\0';
 
-        if (entry->inode != 0) {
-            char name_buf[64];
-            uint8_t nlen = (entry->name_len < 63) ? entry->name_len : 63;
-            memcpy(name_buf, (char*)entry + sizeof(struct EXT2DirectoryEntry), nlen);
-            name_buf[nlen] = '\0';
-
-            if (str_cmp(name_buf, target) == 0) {
-                if (entry->file_type != EXT2_FT_DIR) {
-                    shell_print("cd: Bukan sebuah direktori!\n", 0x0C);
+            if (str_cmp(name, argv[1]) == 0) {
+                if (e->file_type != EXT2_FT_DIR) {
+                    shell_print("cd: Bukan direktori\n", 0x0C);
                     return;
                 }
-                cwd_inode = entry->inode;
+                cwd_inode = e->inode;
                 found = true;
-
-                // Perbarui path string
-                if (str_cmp(target, "..") == 0) {
+                if (str_cmp(argv[1], "..") == 0) {
                     if (cwd_inode == 1) {
                         str_cpy(cwd_path, "/");
                     } else {
-                        // Potong subfolder terakhir
-                        int len = str_len(cwd_path);
-                        while (len > 1 && cwd_path[len - 1] != '/') len--;
-                        if (len > 1) cwd_path[len - 1] = '\0';
-                        else { cwd_path[1] = '\0'; }
+                        int l = str_len(cwd_path);
+                        while (l > 1 && cwd_path[l - 1] != '/') l--;
+                        if (l > 1) cwd_path[l - 1] = '\0';
+                        else cwd_path[1] = '\0';
                     }
                 } else {
-                    int len = str_len(cwd_path);
-                    if (len > 1 && cwd_path[len - 1] != '/') {
-                        cwd_path[len] = '/';
-                        cwd_path[len + 1] = '\0';
+                    int l = str_len(cwd_path);
+                    if (l > 1 && cwd_path[l - 1] != '/') {
+                        cwd_path[l] = '/';
+                        cwd_path[l + 1] = '\0';
                     }
                     if (cwd_path[0] == '/' && cwd_path[1] == '\0') {
-                        str_cpy(cwd_path + 1, target);
+                        str_cpy(cwd_path + 1, argv[1]);
                     } else {
-                        uint32_t cur = str_len(cwd_path);
-                        str_cpy(cwd_path + cur, target);
+                        str_cpy(cwd_path + str_len(cwd_path), argv[1]);
                     }
                 }
                 break;
             }
         }
-        offset += entry->rec_len;
+        off += e->rec_len;
     }
-
-    if (!found) {
-        shell_print("cd: Direktori tidak ditemukan: ", 0x0C);
-        shell_print(target, 0x0C);
-        shell_print("\n", 0x0C);
-    }
+    if (!found) shell_print("cd: Direktori tidak ditemukan\n", 0x0C);
 }
 
-// --- COMMAND: CAT ---
 static void cmd_cat(int argc, char *argv[]) {
     if (argc < 2) {
-        shell_print("Gunakan: cat <nama_file>\n", 0x0E);
+        shell_print("Gunakan: cat <file>\n", 0x0E);
         return;
     }
-
-    static uint8_t file_buf[4096];
-    memset(file_buf, 0, sizeof(file_buf));
-
-    int8_t ret = sys_read_file(cwd_inode, argv[1], file_buf, sizeof(file_buf) - 1);
-    if (ret == 0) {
-        shell_print((char*) file_buf, 0x0F);
+    memset(sh_buf, 0, sizeof(sh_buf));
+    if (sys_read_file(cwd_inode, argv[1], sh_buf, sizeof(sh_buf) - 1) == 0) {
+        shell_print((char*) sh_buf, 0x0F);
         shell_print("\n", 0x0F);
-    } else if (ret == 1) {
-        shell_print("cat: Target adalah direktori, bukan file!\n", 0x0C);
-    } else if (ret == 3) {
-        shell_print("cat: File tidak ditemukan: ", 0x0C);
-        shell_print(argv[1], 0x0C);
-        shell_print("\n", 0x0C);
     } else {
-        shell_print("cat: Gagal membaca file!\n", 0x0C);
+        shell_print("cat: Gagal membaca file\n", 0x0C);
     }
 }
 
-// --- COMMAND: MKDIR ---
 static void cmd_mkdir(int argc, char *argv[]) {
     if (argc < 2) {
-        shell_print("Gunakan: mkdir <nama_folder>\n", 0x0E);
+        shell_print("Gunakan: mkdir <folder>\n", 0x0E);
         return;
     }
-
-    int8_t ret = sys_write_entry(cwd_inode, argv[1], NULL, 0, true);
-    if (ret == 0) {
-        shell_print("Folder berhasil dibuat!\n", 0x0A);
-    } else if (ret == 1) {
-        shell_print("mkdir: File/folder dengan nama tersebut sudah ada!\n", 0x0C);
+    if (sys_write_entry(cwd_inode, argv[1], NULL, 0, true) == 0) {
+        shell_print("Folder berhasil dibuat\n", 0x0A);
     } else {
-        shell_print("mkdir: Gagal membuat folder!\n", 0x0C);
+        shell_print("mkdir: Gagal membuat folder\n", 0x0C);
     }
 }
 
-// --- COMMAND: RM ---
 static void cmd_rm(int argc, char *argv[]) {
     if (argc < 2) {
-        shell_print("Gunakan: rm <nama_file_atau_folder>\n", 0x0E);
+        shell_print("Gunakan: rm <target>\n", 0x0E);
         return;
     }
-
-    int8_t ret = sys_delete_entry(cwd_inode, argv[1]);
-    if (ret == 0) {
-        shell_print("Berhasil dihapus!\n", 0x0A);
-    } else if (ret == 1) {
-        shell_print("rm: File/folder tidak ditemukan!\n", 0x0C);
-    } else if (ret == 2) {
-        shell_print("rm: Folder tidak kosong!\n", 0x0C);
-    } else if (ret == -1) {
-        shell_print("rm: Ditolak! Tidak boleh menghapus root atau CWD aktif.\n", 0x0C);
-    } else {
-        shell_print("rm: Gagal menghapus!\n", 0x0C);
-    }
+    int8_t r = sys_delete_entry(cwd_inode, argv[1]);
+    if (r == 0) shell_print("Berhasil dihapus\n", 0x0A);
+    else if (r == -1) shell_print("rm: Ditolak (Proteksi Root/CWD)\n", 0x0C);
+    else shell_print("rm: File/folder tidak ditemukan\n", 0x0C);
 }
 
-// --- COMMAND: CP ---
 static void cmd_cp(int argc, char *argv[]) {
     if (argc < 3) {
-        shell_print("Gunakan: cp <source> <destination>\n", 0x0E);
+        shell_print("Gunakan: cp <src> <dst>\n", 0x0E);
         return;
     }
-
-    static uint8_t copy_buf[4096];
-    memset(copy_buf, 0, sizeof(copy_buf));
-
-    int8_t ret = sys_read_file(cwd_inode, argv[1], copy_buf, sizeof(copy_buf));
-    if (ret != 0) {
-        shell_print("cp: Gagal membaca file sumber!\n", 0x0C);
+    memset(sh_buf, 0, sizeof(sh_buf));
+    if (sys_read_file(cwd_inode, argv[1], sh_buf, sizeof(sh_buf)) != 0) {
+        shell_print("cp: File sumber tidak ditemukan\n", 0x0C);
         return;
     }
-
-    uint32_t fsize = str_len((char*) copy_buf);
-    ret = sys_write_entry(cwd_inode, argv[2], copy_buf, fsize, false);
-    if (ret == 0) {
-        shell_print("File berhasil disalin!\n", 0x0A);
-    } else if (ret == 1) {
-        shell_print("cp: File tujuan sudah ada!\n", 0x0C);
+    if (sys_write_entry(cwd_inode, argv[2], sh_buf, str_len((char*)sh_buf), false) == 0) {
+        shell_print("File berhasil disalin\n", 0x0A);
     } else {
-        shell_print("cp: Gagal menulis file tujuan!\n", 0x0C);
+        shell_print("cp: Gagal menulis file tujuan\n", 0x0C);
     }
 }
 
-// --- COMMAND: MV ---
 static void cmd_mv(int argc, char *argv[]) {
     if (argc < 3) {
-        shell_print("Gunakan: mv <source> <destination>\n", 0x0E);
+        shell_print("Gunakan: mv <src> <dst>\n", 0x0E);
         return;
     }
-
-    // mv diimplementasikan dengan copy lalu hapus source
-    static uint8_t mv_buf[4096];
-    memset(mv_buf, 0, sizeof(mv_buf));
-
-    int8_t ret = sys_read_file(cwd_inode, argv[1], mv_buf, sizeof(mv_buf));
-    if (ret != 0) {
-        shell_print("mv: File sumber tidak ditemukan!\n", 0x0C);
+    memset(sh_buf, 0, sizeof(sh_buf));
+    if (sys_read_file(cwd_inode, argv[1], sh_buf, sizeof(sh_buf)) != 0) {
+        shell_print("mv: File sumber tidak ditemukan\n", 0x0C);
         return;
     }
-
-    uint32_t fsize = str_len((char*) mv_buf);
-    ret = sys_write_entry(cwd_inode, argv[2], mv_buf, fsize, false);
-    if (ret != 0) {
-        shell_print("mv: Gagal menulis file tujuan!\n", 0x0C);
+    if (sys_write_entry(cwd_inode, argv[2], sh_buf, str_len((char*)sh_buf), false) != 0) {
+        shell_print("mv: Gagal menulis file tujuan\n", 0x0C);
         return;
     }
-
     sys_delete_entry(cwd_inode, argv[1]);
-    shell_print("File berhasil dipindahkan/diubah nama!\n", 0x0A);
+    shell_print("File berhasil dipindahkan\n", 0x0A);
 }
 
-// --- COMMAND: FIND (DFS Traversal) ---
-static void dfs_find(uint32_t inode, const char *cur_path, const char *target_name) {
-    uint8_t dir_buf[BLOCK_SIZE];
-    if (sys_read_dir(inode, ".", dir_buf) != 0) return;
+static void dfs_find(uint32_t ino, const char *path, const char *target) {
+    uint8_t d_buf[BLOCK_SIZE];
+    if (sys_read_dir(ino, ".", d_buf) != 0) return;
 
-    uint32_t offset = 0;
-    while (offset < BLOCK_SIZE) {
-        struct EXT2DirectoryEntry *entry = (struct EXT2DirectoryEntry *) (dir_buf + offset);
-        if (entry->rec_len == 0) break;
+    uint32_t off = 0;
+    while (off < BLOCK_SIZE) {
+        struct EXT2DirectoryEntry *e = (struct EXT2DirectoryEntry *)(d_buf + off);
+        if (e->rec_len == 0) break;
+        if (e->inode != 0) {
+            char name[64];
+            uint8_t len = (e->name_len < 63) ? e->name_len : 63;
+            memcpy(name, (char*)e + sizeof(struct EXT2DirectoryEntry), len);
+            name[len] = '\0';
 
-        if (entry->inode != 0) {
-            char name_buf[64];
-            uint8_t nlen = (entry->name_len < 63) ? entry->name_len : 63;
-            memcpy(name_buf, (char*)entry + sizeof(struct EXT2DirectoryEntry), nlen);
-            name_buf[nlen] = '\0';
-
-            if (str_cmp(name_buf, ".") != 0 && str_cmp(name_buf, "..") != 0) {
-                // Susun path lengkap
-                char next_path[128];
-                str_cpy(next_path, cur_path);
-                if (next_path[str_len(next_path) - 1] != '/') {
-                    uint32_t p = str_len(next_path);
-                    next_path[p] = '/';
-                    next_path[p + 1] = '\0';
+            if (str_cmp(name, ".") != 0 && str_cmp(name, "..") != 0) {
+                char next[128];
+                str_cpy(next, path);
+                uint32_t pl = str_len(next);
+                if (next[pl - 1] != '/') {
+                    next[pl] = '/';
+                    next[pl + 1] = '\0';
                 }
-                uint32_t p = str_len(next_path);
-                str_cpy(next_path + p, name_buf);
+                str_cpy(next + str_len(next), name);
 
-                // Cek kecocokan nama
-                if (str_cmp(name_buf, target_name) == 0) {
+                if (str_cmp(name, target) == 0) {
                     shell_print("Found: ", 0x0A);
-                    shell_print(next_path, 0x0E);
+                    shell_print(next, 0x0E);
                     shell_print("\n", 0x0F);
                 }
-
-                // Jika subfolder, telusuri secara rekursif
-                if (entry->file_type == EXT2_FT_DIR) {
-                    dfs_find(entry->inode, next_path, target_name);
-                }
+                if (e->file_type == EXT2_FT_DIR) dfs_find(e->inode, next, target);
             }
         }
-        offset += entry->rec_len;
+        off += e->rec_len;
     }
 }
 
 static void cmd_find(int argc, char *argv[]) {
     if (argc < 2) {
-        shell_print("Gunakan: find <nama_file_atau_folder>\n", 0x0E);
+        shell_print("Gunakan: find <nama>\n", 0x0E);
         return;
     }
-    shell_print("Mencari '", 0x07);
-    shell_print(argv[1], 0x0B);
-    shell_print("' di seluruh filesystem...\n", 0x07);
-    dfs_find(1, "/", argv[1]); // Mulai dari root
+    dfs_find(1, "/", argv[1]);
 }
 
-// --- COMMAND: GREP ---
-static void cmd_grep(int argc, char *argv[], const char *pipe_input) {
+static void cmd_grep(int argc, char *argv[], const char *pipe_in) {
     if (argc < 2) {
-        shell_print("Gunakan: grep <pattern> [file] atau via pipe |\n", 0x0E);
+        shell_print("Gunakan: grep <pattern> [file]\n", 0x0E);
         return;
     }
-
-    const char *pattern = argv[1];
-    static uint8_t src_buf[4096];
-    const char *source = NULL;
-
-    if (pipe_input && pipe_input[0] != '\0') {
-        source = pipe_input;
+    const char *src = NULL;
+    if (pipe_in && pipe_in[0] != '\0') {
+        src = pipe_in;
     } else if (argc >= 3) {
-        memset(src_buf, 0, sizeof(src_buf));
-        if (sys_read_file(cwd_inode, argv[2], src_buf, sizeof(src_buf) - 1) == 0) {
-            source = (char*) src_buf;
+        memset(sh_buf, 0, sizeof(sh_buf));
+        if (sys_read_file(cwd_inode, argv[2], sh_buf, sizeof(sh_buf) - 1) == 0) {
+            src = (char*) sh_buf;
         } else {
-            shell_print("grep: File tidak dapat dibaca!\n", 0x0C);
+            shell_print("grep: Gagal membaca file\n", 0x0C);
             return;
         }
     } else {
-        shell_print("grep: Tidak ada input (berikan argumen file atau gunakan pipeline |)\n", 0x0E);
+        shell_print("grep: Tidak ada input\n", 0x0E);
         return;
     }
 
-    // Pisahkan baris demi baris dan cari kecocokan pattern
-    char line[256];
-    uint32_t l_idx = 0;
-    while (*source) {
-        if (*source == '\n') {
-            line[l_idx] = '\0';
-            if (str_find(line, pattern) != NULL) {
+    char line[128];
+    uint32_t idx = 0;
+    while (*src) {
+        if (*src == '\n') {
+            line[idx] = '\0';
+            if (str_find(line, argv[1]) != NULL) {
                 shell_print(line, 0x0A);
                 shell_print("\n", 0x0F);
             }
-            l_idx = 0;
+            idx = 0;
         } else {
-            if (l_idx < sizeof(line) - 1) {
-                line[l_idx++] = *source;
-            }
+            if (idx < sizeof(line) - 1) line[idx++] = *src;
         }
-        source++;
+        src++;
     }
-    if (l_idx > 0) {
-        line[l_idx] = '\0';
-        if (str_find(line, pattern) != NULL) {
+    if (idx > 0) {
+        line[idx] = '\0';
+        if (str_find(line, argv[1]) != NULL) {
             shell_print(line, 0x0A);
             shell_print("\n", 0x0F);
         }
     }
 }
 
-// ==================== 5. PARSER & EXECUTOR ====================
+// ==================== 5. PARSER & EXECUTION ====================
 
-static void execute_single_command(char *cmd_str, const char *pipe_in) {
-    // Parsing spasi menjadi argv
+static void execute_single(char *cmd, const char *p_in) {
     char *argv[MAX_ARGS];
     int argc = 0;
+    char *p = cmd;
 
-    char *p = cmd_str;
     while (*p) {
         while (*p == ' ') p++;
         if (!*p) break;
@@ -539,11 +408,10 @@ static void execute_single_command(char *cmd_str, const char *pipe_in) {
         while (*p && *p != ' ') p++;
         if (*p) *p++ = '\0';
     }
-
     if (argc == 0) return;
 
-    if (str_cmp(argv[0], "help") == 0)       cmd_help(argc, argv);
-    else if (str_cmp(argv[0], "clear") == 0) cmd_clear(argc, argv);
+    if (str_cmp(argv[0], "help") == 0)       cmd_help();
+    else if (str_cmp(argv[0], "clear") == 0) sys_clear();
     else if (str_cmp(argv[0], "ls") == 0)    cmd_ls(argc, argv);
     else if (str_cmp(argv[0], "cd") == 0)    cmd_cd(argc, argv);
     else if (str_cmp(argv[0], "cat") == 0)   cmd_cat(argc, argv);
@@ -552,54 +420,51 @@ static void execute_single_command(char *cmd_str, const char *pipe_in) {
     else if (str_cmp(argv[0], "cp") == 0)    cmd_cp(argc, argv);
     else if (str_cmp(argv[0], "mv") == 0)    cmd_mv(argc, argv);
     else if (str_cmp(argv[0], "find") == 0)  cmd_find(argc, argv);
-    else if (str_cmp(argv[0], "grep") == 0)  cmd_grep(argc, argv, pipe_in);
+    else if (str_cmp(argv[0], "grep") == 0)  cmd_grep(argc, argv, p_in);
     else {
-        shell_print("Command tidak dikenal: '", 0x0C);
+        shell_print("Perintah tidak dikenal: ", 0x0C);
         shell_print(argv[0], 0x0C);
-        shell_print("'. Ketik 'help' untuk daftar perintah.\n", 0x0C);
+        shell_print(" (ketik 'help')\n", 0x0C);
     }
 }
 
-static void execute_command_line(char *line) {
-    // Cek apakah terdapat operator pipeline '|'
+static void execute_line(char *line) {
     char *pipe_pos = str_find(line, "|");
+    if (pipe_pos == NULL) {
+        pipe_pos = str_find(line, "\\");
+    }
     if (pipe_pos != NULL) {
         *pipe_pos = '\0';
         char *cmd1 = line;
         char *cmd2 = pipe_pos + 1;
 
-        // 1. Eksekusi command pertama dan rekam outputnya ke buffer
-        pipe_capture_mode = true;
-        pipe_buffer_len = 0;
-        pipe_buffer[0] = '\0';
+        pipe_mode = true;
+        pipe_len = 0;
+        pipe_buf[0] = '\0';
 
-        execute_single_command(cmd1, NULL);
+        execute_single(cmd1, NULL);
 
-        pipe_capture_mode = false;
-
-        // 2. Eksekusi command kedua dengan membawa output command pertama
-        execute_single_command(cmd2, pipe_buffer);
+        pipe_mode = false;
+        execute_single(cmd2, pipe_buf);
     } else {
-        execute_single_command(line, NULL);
+        execute_single(line, NULL);
     }
 }
 
-// ==================== 6. MAIN REPL LOOP ====================
+// ==================== 6. MAIN REPL ====================
 
 int main(void) {
-    // Aktifkan penerimaan keyboard interrupt
-    syscall(7, 0, 0, 0);
-
+    syscall(7, 0, 0, 0); // Aktifkan keyboard interrupt
     sys_clear();
-    sys_puts("====================================================\n", 0x0B);
-    sys_puts("           Selamat Datang di BillyOS Shell          \n", 0x0E);
-    sys_puts("====================================================\n", 0x0B);
-    sys_puts("Ketik 'help' untuk melihat daftar perintah.\n\n", 0x07);
 
-    char line_buf[MAX_LINE_LEN];
-    uint32_t line_idx = 0;
+    sys_puts("============================================\n", 0x0B);
+    sys_puts("          BillyOS Shell (User Mode)         \n", 0x0E);
+    sys_puts("============================================\n", 0x0B);
+    sys_puts("Ketik 'help' untuk daftar perintah.\n\n", 0x07);
 
-    // Cetak prompt awal
+    char line[MAX_LINE_LEN];
+    uint32_t idx = 0;
+
     sys_puts("BillyOS:", 0x0B);
     sys_puts(cwd_path, 0x0E);
     sys_puts("$ ", 0x0F);
@@ -611,25 +476,24 @@ int main(void) {
         if (c != 0) {
             if (c == '\n') {
                 sys_putchar('\n', 0x0F);
-                line_buf[line_idx] = '\0';
+                line[idx] = '\0';
 
-                if (line_idx > 0) {
-                    execute_command_line(line_buf);
-                    line_idx = 0;
+                if (idx > 0) {
+                    execute_line(line);
+                    idx = 0;
                 }
 
-                // Tampilkan prompt baru dengan CWD terkini
                 sys_puts("BillyOS:", 0x0B);
                 sys_puts(cwd_path, 0x0E);
                 sys_puts("$ ", 0x0F);
             } else if (c == '\b') {
-                if (line_idx > 0) {
-                    line_idx--;
+                if (idx > 0) {
+                    idx--;
                     sys_putchar('\b', 0x0F);
                 }
             } else {
-                if (line_idx < MAX_LINE_LEN - 1) {
-                    line_buf[line_idx++] = c;
+                if (idx < MAX_LINE_LEN - 1) {
+                    line[idx++] = c;
                     sys_putchar(c, 0x0F);
                 }
             }
