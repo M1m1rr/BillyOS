@@ -23,6 +23,11 @@ void framebuffer_clear(void) {
 static uint32_t console_row = 0;
 static uint32_t console_col = 0;
 
+void console_set_position(uint32_t row, uint32_t col) {
+    console_row = row;
+    console_col = col;
+}
+
 static void console_scroll(void) {
     uint32_t row_bytes = FRAMEBUFFER_WIDTH * 2;
     for (uint32_t i = 0; i < (FRAMEBUFFER_HEIGHT - 1) * row_bytes; i++)
