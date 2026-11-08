@@ -11,13 +11,13 @@ int main(void) {
     syscall(6, (uint32_t) "BillyOS User Mode Shell Initialized!\n", 37, 0x0A);
 
     // 2. Uji Syscall 0 (FS Read): Coba baca binary file shell dari storage EXT2
-    struct BlockBuffer b = {0};
+    uint8_t file_buf[2048] = {0};
     struct EXT2DriverRequest request = {
-        .buf          = &b,
+        .buf          = file_buf,
         .name         = "shell",
         .name_len     = 5,
         .parent_inode = 1,
-        .buffer_size  = sizeof(b),
+        .buffer_size  = sizeof(file_buf),
         .is_directory = false
     };
     int8_t retcode = -1;
