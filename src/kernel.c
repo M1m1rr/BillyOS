@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stdbool.h>
+#include "header/process/process.h"
 #include "header/cpu/gdt.h"
 #include "header/kernel-entrypoint.h"
 #include "header/driver/framebuffer.h"
@@ -161,40 +162,38 @@ void kernel_setup(void) {
     ext2_set_current_directory(1);
     test_assert(&row, &col, "A3: Hapus active_dir setelah keluar CWD (Exp 0)", delete(req_del_cwd), 0);
 
-        // ==================== 4. LAUNCHING USER MODE (Bab 3.3.5) ====================
-    print_text(&row, &col, "\n-- Launching User Mode (Bab 3.3) --\n", 0x0B);
+        // ==================== 4. LAUNCHING USER MODE SEBAGAI PROSES (Bab 4.1.4) ====================
+    print_text(&row, &col, "\n-- Launching User Mode via PCB Process 0 (Bab 4.1.4) --\n", 0x0B);
 
     // 1. Install & pasang Task State Segment (TSS) ke register TR
     gdt_install_tss();
     set_tss_register();
+    set_tss_kernel_current_stack();
 
-    // 2. Alokasikan page frame virtual memory untuk user program di 0x00000000 dan user stack di 0x003FF000
-    current_pd = paging_get_current_page_directory_addr();
-    for (uint32_t i = 0; i < 4; i++) {
-        paging_allocate_user_page_frame(current_pd, (void*) (i * 0x1000));
-    }
-    paging_allocate_user_page_frame(current_pd, (void*) 0x003FF000);
-
-    // 3. Baca binary program "shell" dari storage EXT2 ke alamat virtual 0x00000000
+    // 2. Buat process untuk shell menggunakan PCB
     struct EXT2DriverRequest req_shell = {
         .buf          = (void*) 0x00000000,
         .name         = "shell",
         .name_len     = 5,
         .parent_inode = 1,
-        .buffer_size  = 0x100000,
+        .buffer_size  = 0x4000,
         .is_directory = false
     };
-    int8_t read_shell_res = read(req_shell);
-    test_assert(&row, &col, "U1: Baca binary shell dari storage (Exp 0)", read_shell_res, 0);
+    int32_t p_res = process_create_user_process(req_shell);
+    test_assert(&row, &col, "U1: Create User Process 'shell' (Exp 0)", p_res, PROCESS_CREATE_SUCCESS);
 
-    print_text(&row, &col, "U2: Melompat ke User Mode (Ring 3)...\n", 0x0E);
-
-    // 4. Perbarui pointer stack kernel pada TSS
-    set_tss_kernel_current_stack();
-
-    // 5. Lompat ke User Mode dan mulai eksekusi shell di 0x00000000!
+    if (p_res != PROCESS_CREATE_SUCCESS) {
+        print_text(&row, &col, "\nKernel Panic: Gagal inisialisasi Process 0!\n", 0x0C);
+        while (true) __asm__ volatile("hlt");
+    }
+    print_text(&row, &col, "U2: Melompat ke Process 0 (Ring 3)...\n", 0x0E);
+    // 3. Aktifkan Page Directory milik Process 0
+    _process_list[0].metadata.state = PROCESS_STATE_RUNNING;
+    paging_use_page_directory(_process_list[0].context.page_directory_virtual_addr);
+    // 4. Lompat ke User Mode dan mulai eksekusi shell di 0x00000000!
     console_set_position(row, col);
     kernel_execute_user_program((void*) 0x00000000);
+
     // ==================== LOOP KEYBOARD (PALING AKHIR) ====================
     keyboard_state_activate();
     while (true) {

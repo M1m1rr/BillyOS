@@ -160,3 +160,63 @@ bool paging_free_user_page_frame(struct PageDirectory *page_dir, void *virtual_a
     flush_single_tlb(virtual_addr);
     return true;
 }
+
+// ==================== PROCESS MEMORY MANAGEMENT (Bab 4.1.1) ====================
+
+__attribute__((aligned(0x1000))) static struct PageDirectory page_directory_list[PAGING_DIRECTORY_TABLE_MAX_COUNT] = {0};
+
+static struct {
+    bool page_directory_used[PAGING_DIRECTORY_TABLE_MAX_COUNT];
+} page_directory_manager = {
+    .page_directory_used = {false},
+};
+
+struct PageDirectory* paging_create_new_page_directory(void) {
+    // 1. Cari page directory yang belum digunakan
+    int32_t idx = -1;
+    for (uint32_t i = 0; i < PAGING_DIRECTORY_TABLE_MAX_COUNT; i++) {
+        if (!page_directory_manager.page_directory_used[i]) {
+            idx = (int32_t) i;
+            break;
+        }
+    }
+    if (idx < 0) return NULL;
+
+    page_directory_manager.page_directory_used[idx] = true;
+    struct PageDirectory *new_pd = &page_directory_list[idx];
+    memset(new_pd, 0, sizeof(struct PageDirectory));
+
+    // 2. Salin pemetaan Kernel Higher Half (indeks 0x300 = 768 / 0xC0000000)
+    new_pd->table[0x300] = _paging_kernel_page_directory.table[0x300];
+
+    // 3. Pasang Recursive Entry pada indeks 1023 (0x3FF)
+    uint32_t pd_phys_addr = ((uint32_t) new_pd) - KERNEL_VIRTUAL_ADDRESS_BASE;
+    new_pd->table[RECURSIVE_PAGE_DIRECTORY_INDEX].flag = (struct PageDirectoryEntryFlag) {
+        .present_bit       = true,
+        .write_bit         = true,
+        .use_pagesize_4_mb = false,
+    };
+    new_pd->table[RECURSIVE_PAGE_DIRECTORY_INDEX].page_table_base_address = pd_phys_addr >> 12;
+
+    return new_pd;
+}
+
+bool paging_free_page_directory(struct PageDirectory *page_dir) {
+    for (uint32_t i = 0; i < PAGING_DIRECTORY_TABLE_MAX_COUNT; i++) {
+        if (&page_directory_list[i] == page_dir) {
+            for (uint32_t d = 0; d < 0x300; d++) {
+                if (page_dir->table[d].flag.present_bit) {
+                    uint32_t pt_pfn = page_dir->table[d].page_table_base_address;
+                    if (pt_pfn >= KERNEL_RESERVED_PAGE_FRAME_COUNT && pt_pfn < PAGE_FRAME_MAX_COUNT) {
+                        page_manager_state.page_frame_map[pt_pfn] = false;
+                        page_manager_state.free_page_frame_count++;
+                    }
+                }
+            }
+            memset(page_dir, 0, sizeof(struct PageDirectory));
+            page_directory_manager.page_directory_used[i] = false;
+            return true;
+        }
+    }
+    return false;
+}

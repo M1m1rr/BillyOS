@@ -22,6 +22,8 @@
 // Total frame fisik maksimum: 128 MiB / 4 KiB = 32768 frame
 #define PAGE_FRAME_MAX_COUNT ((SYSTEM_MEMORY_MB << 20) / PAGE_FRAME_SIZE)
 
+#define PAGING_DIRECTORY_TABLE_MAX_COUNT 32
+
 // Forward declarations
 struct PageDirectory;
 struct PageTable;
@@ -121,5 +123,8 @@ void paging_use_page_directory(struct PageDirectory *page_dir_virtual_addr);
 bool paging_allocate_check(uint32_t amount);
 bool paging_allocate_user_page_frame(struct PageDirectory *page_dir, void *virtual_addr);
 bool paging_free_user_page_frame(struct PageDirectory *page_dir, void *virtual_addr);
+
+struct PageDirectory* paging_create_new_page_directory(void);
+bool paging_free_page_directory(struct PageDirectory *page_dir);
 
 #endif
