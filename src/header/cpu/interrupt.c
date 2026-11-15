@@ -42,6 +42,30 @@ void activate_keyboard_interrupt(void) {
     out(PIC1_DATA, in(PIC1_DATA) & ~(1 << IRQ_KEYBOARD));
 }
 
+#define PIT_MAX_FREQUENCY                 1193182
+#define PIT_TIMER_FREQUENCY               1000
+#define PIT_TIMER_COUNTER                 (PIT_MAX_FREQUENCY / PIT_TIMER_FREQUENCY)
+#define PIT_COMMAND_REGISTER_PIO          0x43
+#define PIT_COMMAND_VALUE_BINARY_MODE     0b0
+#define PIT_COMMAND_VALUE_OPR_SQUARE_WAVE (0b011 << 1)
+#define PIT_COMMAND_VALUE_ACC_LOHIBYTE    (0b11  << 4)
+#define PIT_COMMAND_VALUE_CHANNEL         (0b00  << 6)
+#define PIT_COMMAND_VALUE (PIT_COMMAND_VALUE_BINARY_MODE | \
+                           PIT_COMMAND_VALUE_OPR_SQUARE_WAVE | \
+                           PIT_COMMAND_VALUE_ACC_LOHIBYTE | \
+                           PIT_COMMAND_VALUE_CHANNEL)
+#define PIT_CHANNEL_0_DATA_PIO            0x40
+void activate_timer_interrupt(void) {
+    __asm__ volatile("cli");
+
+    uint32_t pit_timer_counter_to_fire = PIT_TIMER_COUNTER;
+    out(PIT_COMMAND_REGISTER_PIO, PIT_COMMAND_VALUE);
+    out(PIT_CHANNEL_0_DATA_PIO, (uint8_t) (pit_timer_counter_to_fire & 0xFF));
+    out(PIT_CHANNEL_0_DATA_PIO, (uint8_t) ((pit_timer_counter_to_fire >> 8) & 0xFF));
+
+    out(PIC1_DATA, in(PIC1_DATA) & ~(1 << IRQ_TIMER));
+}
+
 static void syscall(struct InterruptFrame frame) {
     switch (frame.cpu.general.eax) {
         case 0:
@@ -78,6 +102,9 @@ static void syscall(struct InterruptFrame frame) {
 
 void main_interrupt_handler(struct InterruptFrame frame) {
     switch (frame.int_number) {
+        case PIC1_OFFSET + IRQ_TIMER:
+            pic_ack(IRQ_TIMER);
+            break;
         case PIC1_OFFSET + IRQ_KEYBOARD:
             keyboard_isr();
             break;

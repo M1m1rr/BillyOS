@@ -34,8 +34,7 @@ static uint32_t process_generate_new_pid(void) {
 
 struct ProcessControlBlock* process_get_current_running_pcb_pointer(void) {
     for (uint32_t i = 0; i < PROCESS_COUNT_MAX; i++) {
-        if (_process_list[i].metadata.pid == process_manager_state.current_running_pid &&
-            _process_list[i].metadata.state != PROCESS_STATE_INACTIVE) {
+        if (_process_list[i].metadata.state == PROCESS_STATE_RUNNING) {
             return &_process_list[i];
         }
     }

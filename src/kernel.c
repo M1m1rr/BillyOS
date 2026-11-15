@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "header/process/process.h"
+#include "header/scheduler/scheduler.h"
 #include "header/cpu/gdt.h"
 #include "header/kernel-entrypoint.h"
 #include "header/driver/framebuffer.h"
@@ -186,13 +187,12 @@ void kernel_setup(void) {
         print_text(&row, &col, "\nKernel Panic: Gagal inisialisasi Process 0!\n", 0x0C);
         while (true) __asm__ volatile("hlt");
     }
-    print_text(&row, &col, "U2: Melompat ke Process 0 (Ring 3)...\n", 0x0E);
-    // 3. Aktifkan Page Directory milik Process 0
-    _process_list[0].metadata.state = PROCESS_STATE_RUNNING;
-    paging_use_page_directory(_process_list[0].context.page_directory_virtual_addr);
-    // 4. Lompat ke User Mode dan mulai eksekusi shell di 0x00000000!
+    print_text(&row, &col, "U2: Melompat ke Process 0 via Scheduler\n", 0x0E);
     console_set_position(row, col);
-    kernel_execute_user_program((void*) 0x00000000);
+    // 3. Inisialisasi Task Scheduler (menyalakan timer PIT 1000 Hz)
+    scheduler_init();
+    // 4. Melompat ke Process 0 melalui Context Switch iret milik Scheduler
+    scheduler_switch_to_next_process();
 
     // ==================== LOOP KEYBOARD (PALING AKHIR) ====================
     keyboard_state_activate();
