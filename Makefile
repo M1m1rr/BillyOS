@@ -44,6 +44,7 @@ kernel:
 	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/header/driver/framebuffer.c -o $(OUTPUT_FOLDER)/framebuffer.o
 	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/header/driver/keyboard.c -o $(OUTPUT_FOLDER)/keyboard.o
 	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/header/driver/disk.c -o $(OUTPUT_FOLDER)/disk.o
+	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/header/driver/cmos.c -o $(OUTPUT_FOLDER)/cmos.o
 	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/filesystem/ext2.c -o $(OUTPUT_FOLDER)/ext2.o
 	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/memory/paging.c -o $(OUTPUT_FOLDER)/paging.o
 	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/stdlib/string.c -o $(OUTPUT_FOLDER)/string.o
@@ -100,8 +101,17 @@ user-loop:
 	@echo Linking object loop...
 	@rm -f *.o
 
-insert-shell: inserter user-shell user-hello user-loop
+user-clock:
+	@$(ASM) $(AFLAGS) $(SOURCE_FOLDER)/crt0.s -o crt0.o
+	@$(CC)  $(CFLAGS) -Os -fno-pie $(SOURCE_FOLDER)/user-clock.c -o user-clock.o
+	@$(LIN) -T $(SOURCE_FOLDER)/user-linker.ld -melf_i386 --oformat=binary \
+		crt0.o user-clock.o -o $(OUTPUT_FOLDER)/clock
+	@echo Linking object clock...
+	@rm -f *.o
+	
+insert-shell: inserter user-shell user-hello user-loop user-clock
 	@echo Inserting binaries into root directory...
 	@cd $(OUTPUT_FOLDER); ./inserter -f shell 1 $(DISK_NAME).bin
 	@cd $(OUTPUT_FOLDER); ./inserter -f hello 1 $(DISK_NAME).bin
 	@cd $(OUTPUT_FOLDER); ./inserter -f loop 1 $(DISK_NAME).bin
+	@cd $(OUTPUT_FOLDER); ./inserter -f clock 1 $(DISK_NAME).bin

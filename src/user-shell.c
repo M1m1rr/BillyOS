@@ -516,6 +516,10 @@ static void execute_single(char *cmd, const char *p_in) {
     else if (str_cmp(argv[0], "ps") == 0)    cmd_ps();
     else if (str_cmp(argv[0], "exec") == 0)  cmd_exec(argc, argv);
     else if (str_cmp(argv[0], "kill") == 0)  cmd_kill(argc, argv);
+    else if (str_cmp(argv[0], "clock") == 0) {
+        char *exec_argv[2] = {"exec", "clock"};
+        cmd_exec(2, exec_argv);
+    }
     else if (str_cmp(argv[0], "exit") == 0) {
         shell_print("Keluar...\n", 0x0E);
         syscall(10, 0, 0, 0);

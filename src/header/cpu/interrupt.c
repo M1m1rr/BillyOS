@@ -7,6 +7,7 @@
 #include "header/filesystem/ext2.h"
 #include "header/driver/framebuffer.h"
 #include "header/driver/keyboard.h"
+#include "header/driver/cmos.h"
 
 void io_wait(void) {
     out(0x80, 0);
@@ -135,6 +136,23 @@ static void syscall(struct InterruptFrame frame) {
             }
             if (frame.cpu.general.ecx != 0) {
                 *((uint32_t*) frame.cpu.general.ecx) = active_count;
+            }
+            break;
+        }
+        case 14:
+            if (frame.cpu.general.ebx != 0) {
+                cmos_read_rtc((struct RTCTime*) frame.cpu.general.ebx);
+            }
+            break;
+        case 15: {
+            const char *str = (const char*) frame.cpu.general.ebx;
+            uint8_t row = (frame.cpu.general.ecx >> 16) & 0xFF;
+            uint8_t col = frame.cpu.general.ecx & 0xFF;
+            uint8_t color = (uint8_t) frame.cpu.general.edx;
+            if (str != NULL) {
+                for (uint32_t i = 0; str[i] != '\0'; i++) {
+                    framebuffer_write(row, col + i, str[i], color, 0);
+                }
             }
             break;
         }
