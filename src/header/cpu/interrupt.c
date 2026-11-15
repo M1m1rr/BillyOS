@@ -98,6 +98,15 @@ static void syscall(struct InterruptFrame frame) {
             console_set_position(0, 0);
             framebuffer_set_cursor(0, 0);
             break;
+        case 10: {
+            struct ProcessControlBlock *current_pcb = process_get_current_running_pcb_pointer();
+            if (current_pcb != NULL) {
+                process_destroy(current_pcb->metadata.pid);
+            }
+
+            scheduler_switch_to_next_process();
+            break;
+        }
     }
 }
 

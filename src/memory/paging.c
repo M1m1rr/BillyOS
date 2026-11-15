@@ -202,6 +202,10 @@ struct PageDirectory* paging_create_new_page_directory(void) {
 }
 
 bool paging_free_page_directory(struct PageDirectory *page_dir) {
+    if (page_dir == paging_get_current_page_directory_addr()) {
+        paging_use_page_directory(&_paging_kernel_page_directory);
+    }
+
     for (uint32_t i = 0; i < PAGING_DIRECTORY_TABLE_MAX_COUNT; i++) {
         if (&page_directory_list[i] == page_dir) {
             for (uint32_t d = 0; d < 0x300; d++) {

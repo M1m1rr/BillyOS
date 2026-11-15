@@ -474,6 +474,10 @@ static void execute_single(char *cmd, const char *p_in) {
     else if (str_cmp(argv[0], "mv") == 0)    cmd_mv(argc, argv);
     else if (str_cmp(argv[0], "find") == 0)  cmd_find(argc, argv);
     else if (str_cmp(argv[0], "grep") == 0)  cmd_grep(argc, argv, p_in);
+    else if (str_cmp(argv[0], "exit") == 0) {
+        shell_print("Keluar dari BillyOS Shell...\n", 0x0E);
+        syscall(10, 0, 0, 0);
+    }
     else {
         shell_print("Perintah tidak dikenal: ", 0x0C);
         shell_print(argv[0], 0x0C);
