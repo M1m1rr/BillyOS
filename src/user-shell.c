@@ -131,14 +131,71 @@ static uint32_t str_to_int(const char *s) {
 }
 
 // ==================== 3. STATE SHELL & SHARED BUFFER ====================
+#define PATH_FILE "path.env"
+static char     env_path[64];
 
-static uint32_t cwd_inode = 1;
-static char     cwd_path[64] = "/";
+static uint32_t cwd_inode;
+static char     cwd_path[64];
 
-static uint8_t  sh_buf[1024];       // Buffer bersama untuk file operations
-static char     pipe_buf[1024];     // Buffer pipeline
+static uint8_t  sh_buf[1024];
+static char     pipe_buf[1024]; 
 static uint32_t pipe_len = 0;
 static bool     pipe_mode = false;
+
+static void env_save(void) {
+    sys_delete_entry(1, PATH_FILE);
+    sys_write_entry(1, PATH_FILE, env_path, str_len(env_path), false);
+}
+static void env_load(void) {
+    memset(sh_buf, 0, sizeof(sh_buf));
+    if (sys_read_file(1, PATH_FILE, sh_buf, sizeof(sh_buf) - 1) == 0 && sh_buf[0] != '\0') {
+        char *p = (char*) sh_buf;
+        while (*p && *p != '\n' && *p != '\r') p++;
+        *p = '\0';
+        if (sh_buf[0] != '\0') {
+            str_cpy(env_path, (char*) sh_buf);
+            return;
+        }
+    }
+    str_cpy(env_path, "/");
+    env_save();
+}
+
+static uint32_t resolve_path(const char *path) {
+    if (!path || !*path) return 0;
+    if (str_cmp(path, "/") == 0) return 1;
+
+    uint32_t cur = (path[0] == '/') ? 1 : cwd_inode;
+    const char *p = (path[0] == '/') ? path + 1 : path;
+
+    while (*p) {
+        char part[32];
+        int i = 0;
+        while (*p && *p != '/' && i < 31) part[i++] = *p++;
+        part[i] = '\0';
+        if (*p == '/') p++;
+        if (i == 0) continue;
+
+        if (sys_read_dir(cur, ".", sh_buf) != 0) return 0;
+
+        uint32_t off = 0, p_len = str_len(part);
+        bool found = false;
+        while (off < BLOCK_SIZE) {
+            struct EXT2DirectoryEntry *e = (struct EXT2DirectoryEntry *)(sh_buf + off);
+            if (e->rec_len == 0) break;
+            if (e->inode != 0 && e->file_type == EXT2_FT_DIR && e->name_len == p_len) {
+                if (memcmp((char*)e + sizeof(*e), part, p_len) == 0) {
+                    cur = e->inode;
+                    found = true;
+                    break;
+                }
+            }
+            off += e->rec_len;
+        }
+        if (!found) return 0;
+    }
+    return cur;
+}
 
 static void shell_print(const char *str, uint8_t color) {
     if (pipe_mode) {
@@ -161,17 +218,14 @@ static void cmd_help(void) {
 
 static void cmd_ls(int argc, char *argv[]) {
     const char *target = (argc > 1) ? argv[1] : ".";
-    uint8_t d_buf[BLOCK_SIZE];
-    memset(d_buf, 0, BLOCK_SIZE);
-
-    if (sys_read_dir(cwd_inode, target, d_buf) != 0) {
-        shell_print("ls: Direktori tidak ditemukan\n", 0x0C);
+    if (sys_read_dir(cwd_inode, target, sh_buf) != 0) {
+        shell_print("ls: Gagal\n", 0x0C);
         return;
     }
 
     uint32_t off = 0;
     while (off < BLOCK_SIZE) {
-        struct EXT2DirectoryEntry *e = (struct EXT2DirectoryEntry *)(d_buf + off);
+        struct EXT2DirectoryEntry *e = (struct EXT2DirectoryEntry *)(sh_buf + off);
         if (e->rec_len == 0) break;
         if (e->inode != 0) {
             char name[64];
@@ -179,22 +233,12 @@ static void cmd_ls(int argc, char *argv[]) {
             memcpy(name, (char*)e + sizeof(struct EXT2DirectoryEntry), len);
             name[len] = '\0';
 
-            if (pipe_mode) {
-                shell_print(name, 0x0F);
-                shell_print("\n", 0x0F); // Satu baris per file untuk input grep
-            } else {
-                if (e->file_type == EXT2_FT_DIR) {
-                    shell_print(name, 0x0B);
-                    shell_print("/  ", 0x0B);
-                } else {
-                    shell_print(name, 0x0F);
-                    shell_print("  ", 0x0F);
-                }
-            }
+            shell_print(name, (e->file_type == EXT2_FT_DIR) ? 0x0B : 0x0F);
+            shell_print((e->file_type == EXT2_FT_DIR) ? "/  " : "  ", 0x0B);
         }
         off += e->rec_len;
     }
-    if (!pipe_mode) shell_print("\n", 0x0F);
+    shell_print("\n", 0x0F);
 }
 
 static void cmd_cd(int argc, char *argv[]) {
@@ -205,54 +249,29 @@ static void cmd_cd(int argc, char *argv[]) {
     }
     if (str_cmp(argv[1], ".") == 0) return;
 
-    uint8_t d_buf[BLOCK_SIZE];
-    if (sys_read_dir(cwd_inode, ".", d_buf) != 0) return;
-
-    uint32_t off = 0;
-    bool found = false;
-    while (off < BLOCK_SIZE) {
-        struct EXT2DirectoryEntry *e = (struct EXT2DirectoryEntry *)(d_buf + off);
-        if (e->rec_len == 0) break;
-        if (e->inode != 0) {
-            char name[64];
-            uint8_t len = (e->name_len < 63) ? e->name_len : 63;
-            memcpy(name, (char*)e + sizeof(struct EXT2DirectoryEntry), len);
-            name[len] = '\0';
-
-            if (str_cmp(name, argv[1]) == 0) {
-                if (e->file_type != EXT2_FT_DIR) {
-                    shell_print("cd: Bukan direktori\n", 0x0C);
-                    return;
-                }
-                cwd_inode = e->inode;
-                found = true;
-                if (str_cmp(argv[1], "..") == 0) {
-                    if (cwd_inode == 1) {
-                        str_cpy(cwd_path, "/");
-                    } else {
-                        int l = str_len(cwd_path);
-                        while (l > 1 && cwd_path[l - 1] != '/') l--;
-                        if (l > 1) cwd_path[l - 1] = '\0';
-                        else cwd_path[1] = '\0';
-                    }
-                } else {
-                    int l = str_len(cwd_path);
-                    if (l > 1 && cwd_path[l - 1] != '/') {
-                        cwd_path[l] = '/';
-                        cwd_path[l + 1] = '\0';
-                    }
-                    if (cwd_path[0] == '/' && cwd_path[1] == '\0') {
-                        str_cpy(cwd_path + 1, argv[1]);
-                    } else {
-                        str_cpy(cwd_path + str_len(cwd_path), argv[1]);
-                    }
-                }
-                break;
-            }
-        }
-        off += e->rec_len;
+    uint32_t target = resolve_path(argv[1]);
+    if (target == 0) {
+        shell_print("cd: Direktori tidak ditemukan\n", 0x0C);
+        return;
     }
-    if (!found) shell_print("cd: Direktori tidak ditemukan\n", 0x0C);
+    cwd_inode = target;
+    if (str_cmp(argv[1], "..") == 0) {
+        if (cwd_inode == 1) str_cpy(cwd_path, "/");
+        else {
+            int l = str_len(cwd_path);
+            while (l > 1 && cwd_path[l - 1] != '/') l--;
+            cwd_path[(l > 1) ? l - 1 : 1] = '\0';
+        }
+    } else if (argv[1][0] == '/') {
+        str_cpy(cwd_path, argv[1]);
+    } else {
+        int l = str_len(cwd_path);
+        if (l > 1 && cwd_path[l - 1] != '/') {
+            cwd_path[l++] = '/';
+            cwd_path[l] = '\0';
+        }
+        str_cpy(cwd_path + ((cwd_path[0] == '/' && cwd_path[1] == '\0') ? 1 : l), argv[1]);
+    }
 }
 
 static void cmd_cat(int argc, char *argv[]) {
@@ -429,18 +448,18 @@ static void cmd_grep(int argc, char *argv[], const char *pipe_in) {
 static void cmd_ps(void) {
     struct ProcessMetadata list[PROCESS_COUNT_MAX];
     uint32_t count = sys_process_get_info(list);
-    shell_print("PID   NAME         STATE\n-------------------------\n", 0x0B);
+    shell_print("PID  NAME         STATE\n-----------------------\n", 0x0B);
     for (uint32_t i = 0; i < PROCESS_COUNT_MAX; i++) {
         if (list[i].state != PROCESS_STATE_INACTIVE) {
             char pid_s[12];
             int_to_str(list[i].pid, pid_s);
             shell_print(pid_s, 0x0F);
-            for (uint32_t s = str_len(pid_s); s < 6; s++) shell_print(" ", 0x0F);
+            shell_print("    ", 0x0F);
             shell_print(list[i].name, 0x0E);
-            for (uint32_t s = str_len(list[i].name); s < 13; s++) shell_print(" ", 0x0F);
-            const char *st = (list[i].state == PROCESS_STATE_RUNNING) ? "RUNNING\n" :
-                             (list[i].state == PROCESS_STATE_READY)   ? "READY\n" : "BLOCKED\n";
-            shell_print(st, (list[i].state == PROCESS_STATE_RUNNING) ? 0x0A : 0x03);
+            shell_print("    ", 0x0F);
+            shell_print((list[i].state == PROCESS_STATE_RUNNING) ? "RUNNING\n" :
+                        (list[i].state == PROCESS_STATE_READY)   ? "READY\n" : "BLOCKED\n",
+                        (list[i].state == PROCESS_STATE_RUNNING) ? 0x0A : 0x03);
         }
     }
     shell_print("Aktif: ", 0x07);
@@ -450,27 +469,49 @@ static void cmd_ps(void) {
     shell_print("\n", 0x07);
 }
 
+static bool spawn_from_inode(uint32_t inode, const char *name) {
+    struct EXT2DriverRequest req = {
+        .buf          = (void*) 0,
+        .name         = (char*) name,
+        .name_len     = (uint8_t) str_len(name),
+        .parent_inode = inode,
+        .buffer_size  = 0x4000,
+        .is_directory = false,
+    };
+    if (sys_process_create(&req) == 0) {
+        for (volatile int i = 0; i < 3000000; i++);
+        return true;
+    }
+    return false;
+}
+
+static bool try_exec_from_path(const char *cmd_name) {
+    if (!cmd_name || !*cmd_name) return false;
+    char path_copy[128];
+    str_cpy(path_copy, env_path);
+    char *dir = path_copy;
+    while (*dir) {
+        char *end = dir;
+        while (*end && *end != ':' && *end != ';') end++;
+        char saved = *end;
+        *end = '\0';
+        if (*dir != '\0') {
+            uint32_t target = resolve_path(dir);
+            if (target != 0 && spawn_from_inode(target, cmd_name)) return true;
+        }
+        if (saved == '\0') break;
+        dir = end + 1;
+    }
+    if (cwd_inode != 1 && spawn_from_inode(cwd_inode, cmd_name)) return true;
+    return false;
+}
+
 static void cmd_exec(int argc, char *argv[]) {
     if (argc < 2) {
         shell_print("exec <nama_file>\n", 0x0C);
         return;
     }
-    struct EXT2DriverRequest req = {
-        .buf          = (void*) 0,
-        .name         = argv[1],
-        .name_len     = (uint8_t) str_len(argv[1]),
-        .parent_inode = cwd_inode,
-        .buffer_size  = 0x4000,
-        .is_directory = false,
-    };
-    int32_t ret = sys_process_create(&req);
-    if (ret != 0 && cwd_inode != 1) {
-        req.parent_inode = 1;
-        ret = sys_process_create(&req);
-    }
-    if (ret == 0) {
-        for (volatile int i = 0; i < 3000000; i++);
-    } else {
+    if (!try_exec_from_path(argv[1])) {
         shell_print("exec: Gagal\n", 0x0C);
     }
 }
@@ -485,6 +526,58 @@ static void cmd_kill(int argc, char *argv[]) {
         shell_print("kill: Gagal / PID tdk valid\n", 0x0C);
     } else {
         shell_print("kill: Berhasil\n", 0x0A);
+    }
+}
+
+static void cmd_export(int argc, char *argv[]) {
+    if (argc < 2) {
+        shell_print("PATH=", 0x0B);
+        shell_print(env_path, 0x0E);
+        shell_print("\n", 0x0F);
+        return;
+    }
+
+    // Format: export PATH=...
+    if (memcmp(argv[1], "PATH=", 5) == 0) {
+        char *val = argv[1] + 5;
+        if (*val == '"') {
+            val++;
+            char *end = val;
+            while (*end && *end != '"') end++;
+            *end = '\0';
+        }
+
+        char new_path[128];
+        char *p_in = val;
+        char *p_out = new_path;
+        uint32_t out_len = 0;
+
+        // Ekspansi $PATH jika ada di dalam input user
+        while (*p_in && out_len < 120) {
+            if (memcmp(p_in, "$PATH", 5) == 0) {
+                uint32_t elen = str_len(env_path);
+                if (out_len + elen < 120) {
+                    memcpy(p_out, env_path, elen);
+                    p_out += elen;
+                    out_len += elen;
+                }
+                p_in += 5;
+            } else {
+                *p_out++ = *p_in++;
+                out_len++;
+            }
+        }
+        *p_out = '\0';
+
+        if (new_path[0] != '\0') {
+            str_cpy(env_path, new_path);
+            env_save();
+            shell_print("PATH: ", 0x0A);
+            shell_print(env_path, 0x0E);
+            shell_print("\n", 0x0F);
+        }
+    } else {
+        shell_print("Format: export PATH=<val>\n", 0x0C);
     }
 }
 
@@ -516,16 +609,15 @@ static void execute_single(char *cmd, const char *p_in) {
     else if (str_cmp(argv[0], "ps") == 0)    cmd_ps();
     else if (str_cmp(argv[0], "exec") == 0)  cmd_exec(argc, argv);
     else if (str_cmp(argv[0], "kill") == 0)  cmd_kill(argc, argv);
-    else if (str_cmp(argv[0], "clock") == 0) {
-        char *exec_argv[2] = {"exec", "clock"};
-        cmd_exec(2, exec_argv);
-    }
+    else if (str_cmp(argv[0], "export") == 0) cmd_export(argc, argv);
     else if (str_cmp(argv[0], "exit") == 0) {
         shell_print("Keluar...\n", 0x0E);
         syscall(10, 0, 0, 0);
     }
     else {
-        shell_print("Perintah tdk dikenal\n", 0x0C);
+        if (!try_exec_from_path(argv[0])) {
+            shell_print("Perintah tdk dikenal\n", 0x0C);
+        }
     }
 }
 
@@ -555,8 +647,14 @@ static void execute_line(char *line) {
 // ==================== 6. MAIN REPL ====================
 
 int main(void) {
+    cwd_inode = 1;
+    cwd_path[0] = '/';
+    cwd_path[1] = '\0';
+
     syscall(7, 0, 0, 0); // Aktifkan keyboard interrupt
     sys_clear();
+
+    env_load();
 
     sys_puts("=== BillyOS Shell (User Mode) ===\nKetik 'help' untuk daftar perintah.\n\n", 0x0B);
 
@@ -597,6 +695,5 @@ int main(void) {
             }
         }
     }
-
     return 0;
 }

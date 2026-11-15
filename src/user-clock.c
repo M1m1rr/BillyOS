@@ -24,11 +24,13 @@ int main(void) {
         if (t.second != last_sec) {
             last_sec = t.second;
 
-            // Format: [HH:MM:SS]
+            uint8_t hour_wib = (t.hour + 7) % 24;
+
+            // Format:  HH:MM:SS 
             char buf[11];
             buf[0] = ' ';
-            buf[1] = (t.hour / 10) + '0';
-            buf[2] = (t.hour % 10) + '0';
+            buf[1] = (hour_wib / 10) + '0';
+            buf[2] = (hour_wib % 10) + '0';
             buf[3] = ':';
             buf[4] = (t.minute / 10) + '0';
             buf[5] = (t.minute % 10) + '0';

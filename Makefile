@@ -17,7 +17,6 @@ CFLAGS        = $(DEBUG_CFLAG) $(WARNING_CFLAG) $(STRIP_CFLAG) -m32 -c -I$(SOURC
 AFLAGS        = -f elf32 -g -F dwarf
 LFLAGS        = -T $(SOURCE_FOLDER)/linker.ld -melf_i386
 
-
 run: all
 	@qemu-system-i386 \
 	-drive file=$(OUTPUT_FOLDER)/$(DISK_NAME).bin,format=raw,if=ide,index=0,media=disk \
@@ -75,15 +74,12 @@ inserter:
 
 user-shell:
 	@$(ASM) $(AFLAGS) $(SOURCE_FOLDER)/crt0.s -o crt0.o
-	@$(CC)  $(CFLAGS) -Os -fno-pie $(SOURCE_FOLDER)/user-shell.c -o user-shell.o
-	@$(CC)  $(CFLAGS) -Os -fno-pie $(SOURCE_FOLDER)/stdlib/string.c -o string.o
-	@$(LIN) -T $(SOURCE_FOLDER)/user-linker.ld -melf_i386 --oformat=binary \
+	@$(CC)  $(CFLAGS) -Os -ffunction-sections -fdata-sections -fno-pie $(SOURCE_FOLDER)/user-shell.c -o user-shell.o
+	@$(CC)  $(CFLAGS) -Os -ffunction-sections -fdata-sections -fno-pie $(SOURCE_FOLDER)/stdlib/string.c -o string.o
+	@$(LIN) -T $(SOURCE_FOLDER)/user-linker.ld -melf_i386 --gc-sections --oformat=binary \
 		crt0.o user-shell.o string.o -o $(OUTPUT_FOLDER)/shell
-	@$(LIN) -T $(SOURCE_FOLDER)/user-linker.ld -melf_i386 --oformat=elf32-i386 \
+	@$(LIN) -T $(SOURCE_FOLDER)/user-linker.ld -melf_i386 --gc-sections --oformat=elf32-i386 \
 		crt0.o user-shell.o string.o -o $(OUTPUT_FOLDER)/shell_elf
-	@echo Linking object shell object files and generate flat binary...
-	@size --target=binary $(OUTPUT_FOLDER)/shell
-	@rm -f *.o
 
 user-hello:
 	@$(ASM) $(AFLAGS) $(SOURCE_FOLDER)/crt0.s -o crt0.o
@@ -116,7 +112,7 @@ user-fib:
 		crt0.o user-fib.o -o $(OUTPUT_FOLDER)/fib
 	@echo Linking object fib...
 	@rm -f *.o
-	
+
 insert-shell: inserter user-shell user-hello user-loop user-clock user-fib
 	@echo Inserting binaries into root directory...
 	@cd $(OUTPUT_FOLDER); ./inserter -f shell 1 $(DISK_NAME).bin
