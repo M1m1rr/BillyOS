@@ -234,70 +234,92 @@ static void cmd_cd(int argc, char *argv[]) {
 }
 
 static void cmd_cat(int argc, char *argv[]) {
-    if (argc < 2) {
-        shell_print("Gunakan: cat <file>\n", 0x0E);
+    if (argc < 2 || argv[1][0] == '\0') {
+        shell_print("cat: Nama file belum ditentukan\n", 0x0C);
         return;
     }
     memset(sh_buf, 0, sizeof(sh_buf));
-    if (sys_read_file(cwd_inode, argv[1], sh_buf, sizeof(sh_buf) - 1) == 0) {
+    int8_t r = sys_read_file(cwd_inode, argv[1], sh_buf, sizeof(sh_buf) - 1);
+    if (r == 0) {
         shell_print((char*) sh_buf, 0x0F);
         shell_print("\n", 0x0F);
+    } else if (r == 1) {
+        shell_print("cat: Target adalah folder, bukan file!\n", 0x0C);
     } else {
-        shell_print("cat: Gagal membaca file\n", 0x0C);
+        shell_print("cat: File tidak ditemukan\n", 0x0C);
     }
 }
 
 static void cmd_mkdir(int argc, char *argv[]) {
-    if (argc < 2) {
-        shell_print("Gunakan: mkdir <folder>\n", 0x0E);
+    if (argc < 2 || argv[1] == NULL || argv[1][0] == '\0') {
+        shell_print("mkdir: Nama folder belum ditentukan\n", 0x0C);
         return;
     }
-    if (sys_write_entry(cwd_inode, argv[1], NULL, 0, true) == 0) {
+    if (str_find(argv[1], "/") != NULL) {
+        shell_print("mkdir: Nama folder tidak boleh mengandung '/'\n", 0x0C);
+        return;
+    }
+    int8_t ret = sys_write_entry(cwd_inode, argv[1], NULL, 0, true);
+    if (ret == 0) {
         shell_print("Folder berhasil dibuat\n", 0x0A);
+    } else if (ret == 1) {
+        shell_print("mkdir: File/folder sudah ada (nama tidak boleh sama)\n", 0x0C);
     } else {
         shell_print("mkdir: Gagal membuat folder\n", 0x0C);
     }
 }
 
 static void cmd_rm(int argc, char *argv[]) {
-    if (argc < 2) {
-        shell_print("Gunakan: rm <target>\n", 0x0E);
+    if (argc < 2 || argv[1][0] == '\0') {
+        shell_print("rm: Target yang akan dihapus belum ditentukan\n", 0x0C);
         return;
     }
     int8_t r = sys_delete_entry(cwd_inode, argv[1]);
     if (r == 0) shell_print("Berhasil dihapus\n", 0x0A);
-    else if (r == -1) shell_print("rm: Ditolak (Proteksi Root/CWD)\n", 0x0C);
+    else if (r == -1) shell_print("rm: Ditolak (Proteksi Root / CWD / Navigasi)\n", 0x0C);
+    else if (r == 2) shell_print("rm: Gagal menghapus folder (folder tidak kosong)\n", 0x0C);
     else shell_print("rm: File/folder tidak ditemukan\n", 0x0C);
 }
 
 static void cmd_cp(int argc, char *argv[]) {
-    if (argc < 3) {
-        shell_print("Gunakan: cp <src> <dst>\n", 0x0E);
+    if (argc < 3 || argv[1][0] == '\0' || argv[2][0] == '\0') {
+        shell_print("cp: Parameter belum lengkap\n", 0x0C);
         return;
     }
     memset(sh_buf, 0, sizeof(sh_buf));
-    if (sys_read_file(cwd_inode, argv[1], sh_buf, sizeof(sh_buf)) != 0) {
-        shell_print("cp: File sumber tidak ditemukan\n", 0x0C);
+    int8_t r = sys_read_file(cwd_inode, argv[1], sh_buf, sizeof(sh_buf));
+    if (r != 0) {
+        if (r == 1) shell_print("cp: Sumber adalah folder (bukan file)\n", 0x0C);
+        else shell_print("cp: File sumber tidak ditemukan\n", 0x0C);
         return;
     }
-    if (sys_write_entry(cwd_inode, argv[2], sh_buf, str_len((char*)sh_buf), false) == 0) {
+    int8_t wr = sys_write_entry(cwd_inode, argv[2], sh_buf, str_len((char*)sh_buf), false);
+    if (wr == 0) {
         shell_print("File berhasil disalin\n", 0x0A);
+    } else if (wr == 1) {
+        shell_print("cp: File/folder tujuan sudah ada (nama tidak boleh sama)\n", 0x0C);
     } else {
         shell_print("cp: Gagal menulis file tujuan\n", 0x0C);
     }
 }
 
 static void cmd_mv(int argc, char *argv[]) {
-    if (argc < 3) {
-        shell_print("Gunakan: mv <src> <dst>\n", 0x0E);
+    if (argc < 3 || argv[1][0] == '\0' || argv[2][0] == '\0') {
+        shell_print("mv: Parameter belum lengkap\n", 0x0C);
         return;
     }
     memset(sh_buf, 0, sizeof(sh_buf));
-    if (sys_read_file(cwd_inode, argv[1], sh_buf, sizeof(sh_buf)) != 0) {
-        shell_print("mv: File sumber tidak ditemukan\n", 0x0C);
+    int8_t r = sys_read_file(cwd_inode, argv[1], sh_buf, sizeof(sh_buf));
+    if (r != 0) {
+        if (r == 1) shell_print("mv: Sumber adalah folder (bukan file)\n", 0x0C);
+        else shell_print("mv: File sumber tidak ditemukan\n", 0x0C);
         return;
     }
-    if (sys_write_entry(cwd_inode, argv[2], sh_buf, str_len((char*)sh_buf), false) != 0) {
+    int8_t wr = sys_write_entry(cwd_inode, argv[2], sh_buf, str_len((char*)sh_buf), false);
+    if (wr == 1) {
+        shell_print("mv: File/folder tujuan sudah ada (nama tidak boleh sama)\n", 0x0C);
+        return;
+    } else if (wr != 0) {
         shell_print("mv: Gagal menulis file tujuan\n", 0x0C);
         return;
     }
@@ -305,7 +327,7 @@ static void cmd_mv(int argc, char *argv[]) {
     shell_print("File berhasil dipindahkan\n", 0x0A);
 }
 
-static void dfs_find(uint32_t ino, const char *path, const char *target) {
+static void dfs_find(uint32_t ino, const char *path, const char *target, int mode) {
     uint8_t d_buf[BLOCK_SIZE];
     if (sys_read_dir(ino, ".", d_buf) != 0) return;
 
@@ -329,12 +351,28 @@ static void dfs_find(uint32_t ino, const char *path, const char *target) {
                 }
                 str_cpy(next + str_len(next), name);
 
-                if (str_cmp(name, target) == 0) {
+                // 1. Pencarian nama (mode 0 = auto, mode 1 = nama)
+                if (mode != 2 && str_cmp(name, target) == 0) {
                     shell_print("Found: ", 0x0A);
                     shell_print(next, 0x0E);
                     shell_print("\n", 0x0F);
                 }
-                if (e->file_type == EXT2_FT_DIR) dfs_find(e->inode, next, target);
+
+                // 2. Traversal DFS jika entri adalah direktori
+                if (e->file_type == EXT2_FT_DIR) {
+                    dfs_find(e->inode, next, target, mode);
+                }
+                // 3. Pencarian isi file jika entri adalah file biasa (mode 0 = auto, mode 2 = isi)
+                else if (e->file_type == EXT2_FT_REG_FILE && mode != 1) {
+                    memset(sh_buf, 0, sizeof(sh_buf));
+                    if (sys_read_file(ino, name, sh_buf, sizeof(sh_buf) - 1) == 0) {
+                        if (str_find((char*) sh_buf, target) != NULL) {
+                            shell_print("Found in content: ", 0x0B);
+                            shell_print(next, 0x0E);
+                            shell_print("\n", 0x0F);
+                        }
+                    }
+                }
             }
         }
         off += e->rec_len;
@@ -343,10 +381,25 @@ static void dfs_find(uint32_t ino, const char *path, const char *target) {
 
 static void cmd_find(int argc, char *argv[]) {
     if (argc < 2) {
-        shell_print("Gunakan: find <nama>\n", 0x0E);
+        shell_print("Gunakan: find <kata> atau find -content <kata>\n", 0x0E);
         return;
     }
-    dfs_find(1, "/", argv[1]);
+
+    if (str_cmp(argv[1], "-name") == 0) {
+        if (argc < 3) {
+            shell_print("find: Nama file belum ditentukan\n", 0x0C);
+            return;
+        }
+        dfs_find(1, "/", argv[2], 1);
+    } else if (str_cmp(argv[1], "-content") == 0 || str_cmp(argv[1], "-c") == 0) {
+        if (argc < 3) {
+            shell_print("find: Kata belum ditentukan\n", 0x0C);
+            return;
+        }
+        dfs_find(1, "/", argv[2], 2);
+    } else {
+        dfs_find(1, "/", argv[1], 0);
+    }
 }
 
 static void cmd_grep(int argc, char *argv[], const char *pipe_in) {

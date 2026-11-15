@@ -248,7 +248,7 @@ void initialize_filesystem_ext2(void) {
 }
 
 int8_t read_directory(struct EXT2DriverRequest *prequest) {
-    if (!prequest || !prequest->buf) return -1;
+    if (!prequest || !prequest->buf || !prequest->name || prequest->name_len == 0) return -1;
     if (prequest->parent_inode == 0 || prequest->parent_inode > fs_superblock.s_inodes_count) return 3;
 
     // 1. Validasi parent folder
@@ -283,7 +283,7 @@ int8_t read_directory(struct EXT2DriverRequest *prequest) {
 }
 
 int8_t read(struct EXT2DriverRequest request) {
-    if (request.buffer_size == 0) return -1;
+    if (request.buffer_size == 0 || !request.name || request.name_len == 0) return -1;
     if (request.parent_inode == 0 || request.parent_inode > fs_superblock.s_inodes_count) return 4;
 
     // 1. Validasi parent folder
@@ -437,7 +437,7 @@ static bool add_directory_entry(struct EXT2Inode *parent_node, uint32_t child_in
 // ==================== IMPLEMENTASI WRITE ====================
 
 int8_t write(struct EXT2DriverRequest *request) {
-    if (!request) return -1;
+    if (!request || !request->name || request->name_len == 0) return -1;
     if (request->parent_inode == 0 || request->parent_inode > fs_superblock.s_inodes_count) return 2;
 
     // 1. Validasi parent inode
@@ -518,6 +518,7 @@ int8_t write(struct EXT2DriverRequest *request) {
 // ==================== IMPLEMENTASI DELETE ====================
 
 int8_t delete(struct EXT2DriverRequest request) {
+    if (!request.name || request.name_len == 0) return -1;
     if (request.parent_inode == 0 || request.parent_inode > fs_superblock.s_inodes_count) return 3;
 
     // --- PROTEKSI 1: Tidak boleh menghapus entri navigasi '.' atau '..' ---
