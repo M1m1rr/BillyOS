@@ -107,9 +107,19 @@ static void syscall(struct InterruptFrame frame) {
             scheduler_switch_to_next_process();
             break;
         }
-        case 11:
-            *((int32_t*) frame.cpu.general.ecx) = process_create_user_process(*(struct EXT2DriverRequest*) frame.cpu.general.ebx);
+        case 11: {
+            struct EXT2DriverRequest *req = (struct EXT2DriverRequest*) frame.cpu.general.ebx;
+            int32_t res = process_create_user_process(*req);
+            if (res == PROCESS_CREATE_SUCCESS) {
+                console_puts("Proses dibuat: ", 15, 0x0A);
+                console_puts(req->name, req->name_len, 0x0E);
+                console_putchar('\n', 0x0F);
+            }
+            if (frame.cpu.general.ecx != 0) {
+                *((int32_t*) frame.cpu.general.ecx) = res;
+            }
             break;
+        }
         case 12: {
             uint32_t target_pid = (uint32_t) frame.cpu.general.ebx;
             struct ProcessControlBlock *current_pcb = process_get_current_running_pcb_pointer();

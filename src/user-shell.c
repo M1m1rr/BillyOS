@@ -449,6 +449,7 @@ static void cmd_ps(void) {
     shell_print(cnt_s, 0x0A);
     shell_print("\n", 0x07);
 }
+
 static void cmd_exec(int argc, char *argv[]) {
     if (argc < 2) {
         shell_print("exec <nama_file>\n", 0x0C);
@@ -468,13 +469,12 @@ static void cmd_exec(int argc, char *argv[]) {
         ret = sys_process_create(&req);
     }
     if (ret == 0) {
-        shell_print("Proses dibuat: ", 0x0A);
-        shell_print(argv[1], 0x0E);
-        shell_print("\n", 0x0F);
+        for (volatile int i = 0; i < 3000000; i++);
     } else {
         shell_print("exec: Gagal\n", 0x0C);
     }
 }
+
 static void cmd_kill(int argc, char *argv[]) {
     if (argc < 2) {
         shell_print("kill <pid>\n", 0x0C);

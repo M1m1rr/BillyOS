@@ -108,10 +108,19 @@ user-clock:
 		crt0.o user-clock.o -o $(OUTPUT_FOLDER)/clock
 	@echo Linking object clock...
 	@rm -f *.o
+
+user-fib:
+	@$(ASM) $(AFLAGS) $(SOURCE_FOLDER)/crt0.s -o crt0.o
+	@$(CC)  $(CFLAGS) -Os -fno-pie $(SOURCE_FOLDER)/user-fib.c -o user-fib.o
+	@$(LIN) -T $(SOURCE_FOLDER)/user-linker.ld -melf_i386 --oformat=binary \
+		crt0.o user-fib.o -o $(OUTPUT_FOLDER)/fib
+	@echo Linking object fib...
+	@rm -f *.o
 	
-insert-shell: inserter user-shell user-hello user-loop user-clock
+insert-shell: inserter user-shell user-hello user-loop user-clock user-fib
 	@echo Inserting binaries into root directory...
 	@cd $(OUTPUT_FOLDER); ./inserter -f shell 1 $(DISK_NAME).bin
 	@cd $(OUTPUT_FOLDER); ./inserter -f hello 1 $(DISK_NAME).bin
 	@cd $(OUTPUT_FOLDER); ./inserter -f loop 1 $(DISK_NAME).bin
 	@cd $(OUTPUT_FOLDER); ./inserter -f clock 1 $(DISK_NAME).bin
+	@cd $(OUTPUT_FOLDER); ./inserter -f fib 1 $(DISK_NAME).bin

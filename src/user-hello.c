@@ -4,14 +4,16 @@ static inline void syscall(uint32_t eax, uint32_t ebx, uint32_t ecx, uint32_t ed
     __asm__ volatile("int $0x30" : : "a"(eax), "b"(ebx), "c"(ecx), "d"(edx) : "memory");
 }
 
-int main(void) {
-    const char msg[] = "Hello World from External User Program!\n";
+static void print_str(const char *s, uint8_t color) {
     uint32_t len = 0;
-    while (msg[len]) len++;
-    
-    // Syscall 6 (console_puts)
-    syscall(6, (uint32_t) msg, len, 0x0A);
-    
-    // Keluar, crt0.s otomatis memanggil Syscall 10 (exit)
+    while (s[len]) len++;
+    syscall(6, (uint32_t) s, len, (uint32_t) color);
+}
+
+int main(void) {
+    print_str("==============================================\n", 0x0B);
+    print_str("  Hello World from BillyOS External Program!  \n", 0x0E);
+    print_str("  Ring 3 Execution | Dynamic Paging Verified  \n", 0x0A);
+    print_str("==============================================\n", 0x0B);
     return 0;
 }
