@@ -3,6 +3,7 @@
 #include "header/driver/keyboard.h"
 #include "header/memory/swap.h"
 #include "header/cpu/gdt.h"
+#include "header/scheduler/scheduler.h"
 #include "header/filesystem/ext2.h"
 #include "header/driver/framebuffer.h"
 #include "header/driver/keyboard.h"
@@ -102,9 +103,19 @@ static void syscall(struct InterruptFrame frame) {
 
 void main_interrupt_handler(struct InterruptFrame frame) {
     switch (frame.int_number) {
-        case PIC1_OFFSET + IRQ_TIMER:
+        case PIC1_OFFSET + IRQ_TIMER: {
             pic_ack(IRQ_TIMER);
+            struct Context current_ctx = {
+                .cpu                         = frame.cpu,
+                .eip                         = frame.int_stack.eip,
+                .eflags                      = frame.int_stack.eflags,
+                .page_directory_virtual_addr = paging_get_current_page_directory_addr(),
+            };
+            scheduler_save_context_to_current_running_pcb(current_ctx);
+
+            scheduler_switch_to_next_process();
             break;
+        }
         case PIC1_OFFSET + IRQ_KEYBOARD:
             keyboard_isr();
             break;
