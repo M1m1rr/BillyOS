@@ -5,7 +5,7 @@ SECTIONS {
     
     .text ALIGN(4): {
         *crt0.o(.text)
-        *(.text)
+        *(.text*)
     }
 
     .rodata ALIGN(4): {
@@ -24,6 +24,7 @@ SECTIONS {
     /DISCARD/ : {
         *(.eh_frame)
         *(.comment)
+        *(.note*)
     }
 
     _linker_user_program_end = .;

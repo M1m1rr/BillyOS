@@ -103,8 +103,39 @@ static void syscall(struct InterruptFrame frame) {
             if (current_pcb != NULL) {
                 process_destroy(current_pcb->metadata.pid);
             }
-
             scheduler_switch_to_next_process();
+            break;
+        }
+        case 11:
+            *((int32_t*) frame.cpu.general.ecx) = process_create_user_process(*(struct EXT2DriverRequest*) frame.cpu.general.ebx);
+            break;
+        case 12: {
+            uint32_t target_pid = (uint32_t) frame.cpu.general.ebx;
+            struct ProcessControlBlock *current_pcb = process_get_current_running_pcb_pointer();
+            bool is_self = (current_pcb != NULL && current_pcb->metadata.pid == target_pid);
+
+            bool success = process_destroy(target_pid);
+            if (frame.cpu.general.ecx != 0) {
+                *((bool*) frame.cpu.general.ecx) = success;
+            }
+
+            if (is_self && success) {
+                scheduler_switch_to_next_process();
+            }
+            break;
+        }
+        case 13: {
+            struct ProcessMetadata *dest = (struct ProcessMetadata*) frame.cpu.general.ebx;
+            uint32_t active_count = 0;
+            for (uint32_t i = 0; i < PROCESS_COUNT_MAX; i++) {
+                dest[i] = _process_list[i].metadata;
+                if (_process_list[i].metadata.state != PROCESS_STATE_INACTIVE) {
+                    active_count++;
+                }
+            }
+            if (frame.cpu.general.ecx != 0) {
+                *((uint32_t*) frame.cpu.general.ecx) = active_count;
+            }
             break;
         }
     }

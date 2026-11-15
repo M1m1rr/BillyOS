@@ -84,6 +84,24 @@ user-shell:
 	@size --target=binary $(OUTPUT_FOLDER)/shell
 	@rm -f *.o
 
-insert-shell: inserter user-shell
-	@echo Inserting shell into root directory...
+user-hello:
+	@$(ASM) $(AFLAGS) $(SOURCE_FOLDER)/crt0.s -o crt0.o
+	@$(CC)  $(CFLAGS) -Os -fno-pie $(SOURCE_FOLDER)/user-hello.c -o user-hello.o
+	@$(LIN) -T $(SOURCE_FOLDER)/user-linker.ld -melf_i386 --oformat=binary \
+		crt0.o user-hello.o -o $(OUTPUT_FOLDER)/hello
+	@echo Linking object hello...
+	@rm -f *.o
+
+user-loop:
+	@$(ASM) $(AFLAGS) $(SOURCE_FOLDER)/crt0.s -o crt0.o
+	@$(CC)  $(CFLAGS) -Os -fno-pie $(SOURCE_FOLDER)/user-loop.c -o user-loop.o
+	@$(LIN) -T $(SOURCE_FOLDER)/user-linker.ld -melf_i386 --oformat=binary \
+		crt0.o user-loop.o -o $(OUTPUT_FOLDER)/loop
+	@echo Linking object loop...
+	@rm -f *.o
+
+insert-shell: inserter user-shell user-hello user-loop
+	@echo Inserting binaries into root directory...
 	@cd $(OUTPUT_FOLDER); ./inserter -f shell 1 $(DISK_NAME).bin
+	@cd $(OUTPUT_FOLDER); ./inserter -f hello 1 $(DISK_NAME).bin
+	@cd $(OUTPUT_FOLDER); ./inserter -f loop 1 $(DISK_NAME).bin

@@ -61,9 +61,15 @@ int32_t process_create_user_process(struct EXT2DriverRequest request) {
     struct ProcessControlBlock *new_pcb = &_process_list[p_index];
     memset(new_pcb, 0, sizeof(struct ProcessControlBlock));
 
+    char name_buffer[PROCESS_NAME_LENGTH_MAX];
+    memset(name_buffer, 0, sizeof(name_buffer));
+    uint8_t copy_len = (request.name_len < PROCESS_NAME_LENGTH_MAX) ? request.name_len : PROCESS_NAME_LENGTH_MAX - 1;
+    memcpy(name_buffer, request.name, copy_len);
+    request.name = name_buffer;
+
     struct PageDirectory *new_pd = paging_create_new_page_directory();
     if (!new_pd) return PROCESS_CREATE_FAIL_NOT_ENOUGH_MEMORY;
-
+    
     struct PageDirectory *prev_pd = paging_get_current_page_directory_addr();
     paging_use_page_directory(new_pd);
 

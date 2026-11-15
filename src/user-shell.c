@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include "header/filesystem/ext2.h"
 #include "header/stdlib/string.h"
+#include "header/process/process.h"
 
 #define MAX_LINE_LEN 128
 #define MAX_ARGS     16
@@ -16,10 +17,14 @@ static void sys_putchar(char c, uint8_t color) {
     syscall(5, (uint32_t) c, (uint32_t) color, 0);
 }
 
+static uint32_t str_len(const char *s) {
+    uint32_t l = 0;
+    while (s[l]) l++;
+    return l;
+}
+
 static void sys_puts(const char *s, uint8_t color) {
-    uint32_t len = 0;
-    while (s[len]) len++;
-    syscall(6, (uint32_t) s, len, (uint32_t) color);
+    syscall(6, (uint32_t) s, str_len(s), (uint32_t) color);
 }
 
 static void sys_getchar(char *c) {
@@ -30,61 +35,51 @@ static void sys_clear(void) {
     syscall(8, 0, 0, 0);
 }
 
-static int8_t sys_read_file(uint32_t parent, const char *name, void *buf, uint32_t size) {
-    uint8_t nlen = 0;
-    while (name[nlen]) nlen++;
+static int8_t sys_fs(uint32_t call_no, uint32_t parent, const char *name, void *buf, uint32_t size, bool is_dir) {
     struct EXT2DriverRequest req = {
-        .buf = buf, .name = (char*) name, .name_len = nlen,
-        .parent_inode = parent, .buffer_size = size, .is_directory = false
-    };
-    int8_t ret = -1;
-    syscall(0, (uint32_t) &req, (uint32_t) &ret, 0);
-    return ret;
-}
-
-static int8_t sys_read_dir(uint32_t parent, const char *name, void *buf) {
-    uint8_t nlen = 0;
-    while (name[nlen]) nlen++;
-    struct EXT2DriverRequest req = {
-        .buf = buf, .name = (char*) name, .name_len = nlen,
-        .parent_inode = parent, .buffer_size = BLOCK_SIZE, .is_directory = true
-    };
-    int8_t ret = -1;
-    syscall(1, (uint32_t) &req, (uint32_t) &ret, 0);
-    return ret;
-}
-
-static int8_t sys_write_entry(uint32_t parent, const char *name, void *buf, uint32_t size, bool is_dir) {
-    uint8_t nlen = 0;
-    while (name[nlen]) nlen++;
-    struct EXT2DriverRequest req = {
-        .buf = buf, .name = (char*) name, .name_len = nlen,
+        .buf = buf, .name = (char*) name, .name_len = (uint8_t) str_len(name),
         .parent_inode = parent, .buffer_size = size, .is_directory = is_dir
     };
     int8_t ret = -1;
-    syscall(2, (uint32_t) &req, (uint32_t) &ret, 0);
+    syscall(call_no, (uint32_t) &req, (uint32_t) &ret, 0);
     return ret;
+}
+
+static int8_t sys_read_file(uint32_t parent, const char *name, void *buf, uint32_t size) {
+    return sys_fs(0, parent, name, buf, size, false);
+}
+
+static int8_t sys_read_dir(uint32_t parent, const char *name, void *buf) {
+    return sys_fs(1, parent, name, buf, BLOCK_SIZE, true);
+}
+
+static int8_t sys_write_entry(uint32_t parent, const char *name, void *buf, uint32_t size, bool is_dir) {
+    return sys_fs(2, parent, name, buf, size, is_dir);
 }
 
 static int8_t sys_delete_entry(uint32_t parent, const char *name) {
-    uint8_t nlen = 0;
-    while (name[nlen]) nlen++;
-    struct EXT2DriverRequest req = {
-        .buf = NULL, .name = (char*) name, .name_len = nlen,
-        .parent_inode = parent, .buffer_size = 0, .is_directory = false
-    };
-    int8_t ret = -1;
-    syscall(3, (uint32_t) &req, (uint32_t) &ret, 0);
+    return sys_fs(3, parent, name, NULL, 0, false);
+}
+
+static int32_t sys_process_create(struct EXT2DriverRequest *req) {
+    int32_t ret = -1;
+    syscall(11, (uint32_t) req, (uint32_t) &ret, 0);
     return ret;
 }
 
-// ==================== 2. HELPER STRING ====================
-
-static uint32_t str_len(const char *s) {
-    uint32_t l = 0;
-    while (s[l]) l++;
-    return l;
+static bool sys_process_destroy(uint32_t pid) {
+    bool ret = false;
+    syscall(12, pid, (uint32_t) &ret, 0);
+    return ret;
 }
+
+static uint32_t sys_process_get_info(struct ProcessMetadata *dest) {
+    uint32_t count = 0;
+    syscall(13, (uint32_t) dest, (uint32_t) &count, 0);
+    return count;
+}
+
+// ==================== 2. HELPER STRING ====================
 
 static int str_cmp(const char *s1, const char *s2) {
     while (*s1 && (*s1 == *s2)) { s1++; s2++; }
@@ -105,6 +100,34 @@ static char* str_find(const char *h, const char *n) {
         }
     }
     return NULL;
+}
+
+static void int_to_str(uint32_t val, char *buf) {
+    if (val == 0) {
+        buf[0] = '0';
+        buf[1] = '\0';
+        return;
+    }
+    char temp[12];
+    int i = 0;
+    while (val > 0) {
+        temp[i++] = (val % 10) + '0';
+        val /= 10;
+    }
+    int j = 0;
+    while (i > 0) {
+        buf[j++] = temp[--i];
+    }
+    buf[j] = '\0';
+}
+
+static uint32_t str_to_int(const char *s) {
+    uint32_t res = 0;
+    while (*s >= '0' && *s <= '9') {
+        res = res * 10 + (*s - '0');
+        s++;
+    }
+    return res;
 }
 
 // ==================== 3. STATE SHELL & SHARED BUFFER ====================
@@ -133,8 +156,7 @@ static void shell_print(const char *str, uint8_t color) {
 // ==================== 4. COMMAND IMPLEMENTATION ====================
 
 static void cmd_help(void) {
-    shell_print("Perintah: cd, ls, mkdir, cat, cp, rm, mv, find, grep, clear, help\n", 0x0E);
-    shell_print("Contoh: cd folder1 | ls | cat file | ls | grep test\n", 0x07);
+    shell_print("Perintah: cd, ls, mkdir, cat, cp, rm, mv, find, grep, ps, exec, kill, exit, clear, help\n", 0x0E);
 }
 
 static void cmd_ls(int argc, char *argv[]) {
@@ -235,96 +257,52 @@ static void cmd_cd(int argc, char *argv[]) {
 
 static void cmd_cat(int argc, char *argv[]) {
     if (argc < 2 || argv[1][0] == '\0') {
-        shell_print("cat: Nama file belum ditentukan\n", 0x0C);
+        shell_print("cat <file>\n", 0x0C);
         return;
     }
     memset(sh_buf, 0, sizeof(sh_buf));
-    int8_t r = sys_read_file(cwd_inode, argv[1], sh_buf, sizeof(sh_buf) - 1);
-    if (r == 0) {
+    if (sys_read_file(cwd_inode, argv[1], sh_buf, sizeof(sh_buf) - 1) == 0) {
         shell_print((char*) sh_buf, 0x0F);
         shell_print("\n", 0x0F);
-    } else if (r == 1) {
-        shell_print("cat: Target adalah folder, bukan file!\n", 0x0C);
     } else {
-        shell_print("cat: File tidak ditemukan\n", 0x0C);
+        shell_print("cat: Gagal\n", 0x0C);
     }
 }
 
 static void cmd_mkdir(int argc, char *argv[]) {
-    if (argc < 2 || argv[1] == NULL || argv[1][0] == '\0') {
-        shell_print("mkdir: Nama folder belum ditentukan\n", 0x0C);
-        return;
-    }
-    if (str_find(argv[1], "/") != NULL) {
-        shell_print("mkdir: Nama folder tidak boleh mengandung '/'\n", 0x0C);
+    if (argc < 2 || argv[1] == NULL || argv[1][0] == '\0' || str_find(argv[1], "/")) {
+        shell_print("mkdir: Nama tdk valid\n", 0x0C);
         return;
     }
     int8_t ret = sys_write_entry(cwd_inode, argv[1], NULL, 0, true);
-    if (ret == 0) {
-        shell_print("Folder berhasil dibuat\n", 0x0A);
-    } else if (ret == 1) {
-        shell_print("mkdir: File/folder sudah ada (nama tidak boleh sama)\n", 0x0C);
-    } else {
-        shell_print("mkdir: Gagal membuat folder\n", 0x0C);
-    }
+    shell_print(ret == 0 ? "Folder dibuat\n" : "mkdir: Gagal\n", ret == 0 ? 0x0A : 0x0C);
 }
 
 static void cmd_rm(int argc, char *argv[]) {
     if (argc < 2 || argv[1][0] == '\0') {
-        shell_print("rm: Target yang akan dihapus belum ditentukan\n", 0x0C);
+        shell_print("rm <target>\n", 0x0C);
         return;
     }
     int8_t r = sys_delete_entry(cwd_inode, argv[1]);
-    if (r == 0) shell_print("Berhasil dihapus\n", 0x0A);
-    else if (r == -1) shell_print("rm: Ditolak (Proteksi Root / CWD / Navigasi)\n", 0x0C);
-    else if (r == 2) shell_print("rm: Gagal menghapus folder (folder tidak kosong)\n", 0x0C);
-    else shell_print("rm: File/folder tidak ditemukan\n", 0x0C);
+    shell_print(r == 0 ? "Dihapus\n" : "rm: Gagal\n", r == 0 ? 0x0A : 0x0C);
 }
 
-static void cmd_cp(int argc, char *argv[]) {
+static void cmd_cp_mv(int argc, char *argv[], bool is_mv) {
     if (argc < 3 || argv[1][0] == '\0' || argv[2][0] == '\0') {
-        shell_print("cp: Parameter belum lengkap\n", 0x0C);
+        shell_print("Argumen kurang!\n", 0x0C);
         return;
     }
     memset(sh_buf, 0, sizeof(sh_buf));
-    int8_t r = sys_read_file(cwd_inode, argv[1], sh_buf, sizeof(sh_buf));
-    if (r != 0) {
-        if (r == 1) shell_print("cp: Sumber adalah folder (bukan file)\n", 0x0C);
-        else shell_print("cp: File sumber tidak ditemukan\n", 0x0C);
+    if (sys_read_file(cwd_inode, argv[1], sh_buf, sizeof(sh_buf)) != 0) {
+        shell_print("Sumber tdk ditemukan\n", 0x0C);
         return;
     }
-    int8_t wr = sys_write_entry(cwd_inode, argv[2], sh_buf, str_len((char*)sh_buf), false);
-    if (wr == 0) {
-        shell_print("File berhasil disalin\n", 0x0A);
-    } else if (wr == 1) {
-        shell_print("cp: File/folder tujuan sudah ada (nama tidak boleh sama)\n", 0x0C);
-    } else {
-        shell_print("cp: Gagal menulis file tujuan\n", 0x0C);
-    }
-}
-
-static void cmd_mv(int argc, char *argv[]) {
-    if (argc < 3 || argv[1][0] == '\0' || argv[2][0] == '\0') {
-        shell_print("mv: Parameter belum lengkap\n", 0x0C);
+    if (sys_write_entry(cwd_inode, argv[2], sh_buf, str_len((char*)sh_buf), false) != 0) {
+        shell_print("Gagal tulis tujuan\n", 0x0C);
         return;
     }
-    memset(sh_buf, 0, sizeof(sh_buf));
-    int8_t r = sys_read_file(cwd_inode, argv[1], sh_buf, sizeof(sh_buf));
-    if (r != 0) {
-        if (r == 1) shell_print("mv: Sumber adalah folder (bukan file)\n", 0x0C);
-        else shell_print("mv: File sumber tidak ditemukan\n", 0x0C);
-        return;
-    }
-    int8_t wr = sys_write_entry(cwd_inode, argv[2], sh_buf, str_len((char*)sh_buf), false);
-    if (wr == 1) {
-        shell_print("mv: File/folder tujuan sudah ada (nama tidak boleh sama)\n", 0x0C);
-        return;
-    } else if (wr != 0) {
-        shell_print("mv: Gagal menulis file tujuan\n", 0x0C);
-        return;
-    }
-    sys_delete_entry(cwd_inode, argv[1]);
-    shell_print("File berhasil dipindahkan\n", 0x0A);
+    if (is_mv) sys_delete_entry(cwd_inode, argv[1]);
+    shell_print(is_mv ? "Berhasil dipindah\n" : "Berhasil disalin\n", 0x0A);
 }
 
 static void dfs_find(uint32_t ino, const char *path, const char *target, int mode) {
@@ -448,6 +426,67 @@ static void cmd_grep(int argc, char *argv[], const char *pipe_in) {
 }
 
 // ==================== 5. PARSER & EXECUTION ====================
+static void cmd_ps(void) {
+    struct ProcessMetadata list[PROCESS_COUNT_MAX];
+    uint32_t count = sys_process_get_info(list);
+    shell_print("PID   NAME         STATE\n-------------------------\n", 0x0B);
+    for (uint32_t i = 0; i < PROCESS_COUNT_MAX; i++) {
+        if (list[i].state != PROCESS_STATE_INACTIVE) {
+            char pid_s[12];
+            int_to_str(list[i].pid, pid_s);
+            shell_print(pid_s, 0x0F);
+            for (uint32_t s = str_len(pid_s); s < 6; s++) shell_print(" ", 0x0F);
+            shell_print(list[i].name, 0x0E);
+            for (uint32_t s = str_len(list[i].name); s < 13; s++) shell_print(" ", 0x0F);
+            const char *st = (list[i].state == PROCESS_STATE_RUNNING) ? "RUNNING\n" :
+                             (list[i].state == PROCESS_STATE_READY)   ? "READY\n" : "BLOCKED\n";
+            shell_print(st, (list[i].state == PROCESS_STATE_RUNNING) ? 0x0A : 0x03);
+        }
+    }
+    shell_print("Aktif: ", 0x07);
+    char cnt_s[12];
+    int_to_str(count, cnt_s);
+    shell_print(cnt_s, 0x0A);
+    shell_print("\n", 0x07);
+}
+static void cmd_exec(int argc, char *argv[]) {
+    if (argc < 2) {
+        shell_print("exec <nama_file>\n", 0x0C);
+        return;
+    }
+    struct EXT2DriverRequest req = {
+        .buf          = (void*) 0,
+        .name         = argv[1],
+        .name_len     = (uint8_t) str_len(argv[1]),
+        .parent_inode = cwd_inode,
+        .buffer_size  = 0x4000,
+        .is_directory = false,
+    };
+    int32_t ret = sys_process_create(&req);
+    if (ret != 0 && cwd_inode != 1) {
+        req.parent_inode = 1;
+        ret = sys_process_create(&req);
+    }
+    if (ret == 0) {
+        shell_print("Proses dibuat: ", 0x0A);
+        shell_print(argv[1], 0x0E);
+        shell_print("\n", 0x0F);
+    } else {
+        shell_print("exec: Gagal\n", 0x0C);
+    }
+}
+static void cmd_kill(int argc, char *argv[]) {
+    if (argc < 2) {
+        shell_print("kill <pid>\n", 0x0C);
+        return;
+    }
+    uint32_t pid = str_to_int(argv[1]);
+    if (pid == 0 || !sys_process_destroy(pid)) {
+        shell_print("kill: Gagal / PID tdk valid\n", 0x0C);
+    } else {
+        shell_print("kill: Berhasil\n", 0x0A);
+    }
+}
 
 static void execute_single(char *cmd, const char *p_in) {
     char *argv[MAX_ARGS];
@@ -470,18 +509,19 @@ static void execute_single(char *cmd, const char *p_in) {
     else if (str_cmp(argv[0], "cat") == 0)   cmd_cat(argc, argv);
     else if (str_cmp(argv[0], "mkdir") == 0) cmd_mkdir(argc, argv);
     else if (str_cmp(argv[0], "rm") == 0)    cmd_rm(argc, argv);
-    else if (str_cmp(argv[0], "cp") == 0)    cmd_cp(argc, argv);
-    else if (str_cmp(argv[0], "mv") == 0)    cmd_mv(argc, argv);
+    else if (str_cmp(argv[0], "cp") == 0)    cmd_cp_mv(argc, argv, false);
+    else if (str_cmp(argv[0], "mv") == 0)    cmd_cp_mv(argc, argv, true);
     else if (str_cmp(argv[0], "find") == 0)  cmd_find(argc, argv);
     else if (str_cmp(argv[0], "grep") == 0)  cmd_grep(argc, argv, p_in);
+    else if (str_cmp(argv[0], "ps") == 0)    cmd_ps();
+    else if (str_cmp(argv[0], "exec") == 0)  cmd_exec(argc, argv);
+    else if (str_cmp(argv[0], "kill") == 0)  cmd_kill(argc, argv);
     else if (str_cmp(argv[0], "exit") == 0) {
-        shell_print("Keluar dari BillyOS Shell...\n", 0x0E);
+        shell_print("Keluar...\n", 0x0E);
         syscall(10, 0, 0, 0);
     }
     else {
-        shell_print("Perintah tidak dikenal: ", 0x0C);
-        shell_print(argv[0], 0x0C);
-        shell_print(" (ketik 'help')\n", 0x0C);
+        shell_print("Perintah tdk dikenal\n", 0x0C);
     }
 }
 
@@ -514,10 +554,7 @@ int main(void) {
     syscall(7, 0, 0, 0); // Aktifkan keyboard interrupt
     sys_clear();
 
-    sys_puts("============================================\n", 0x0B);
-    sys_puts("          BillyOS Shell (User Mode)         \n", 0x0E);
-    sys_puts("============================================\n", 0x0B);
-    sys_puts("Ketik 'help' untuk daftar perintah.\n\n", 0x07);
+    sys_puts("=== BillyOS Shell (User Mode) ===\nKetik 'help' untuk daftar perintah.\n\n", 0x0B);
 
     char line[MAX_LINE_LEN];
     uint32_t idx = 0;
