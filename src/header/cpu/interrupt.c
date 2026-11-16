@@ -109,7 +109,8 @@ static void syscall(struct InterruptFrame frame) {
         }
         case 11: {
             struct EXT2DriverRequest *req = (struct EXT2DriverRequest*) frame.cpu.general.ebx;
-            int32_t res = process_create_user_process(*req);
+            const char *args = (const char*) frame.cpu.general.edx;
+            int32_t res = process_create_user_process(*req, args);
             if (res == PROCESS_CREATE_SUCCESS) {
                 console_puts("Proses dibuat: ", 15, 0x0A);
                 console_puts(req->name, req->name_len, 0x0E);

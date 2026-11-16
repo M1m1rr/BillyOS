@@ -61,12 +61,6 @@ static int8_t sys_delete_entry(uint32_t parent, const char *name) {
     return sys_fs(3, parent, name, NULL, 0, false);
 }
 
-static int32_t sys_process_create(struct EXT2DriverRequest *req) {
-    int32_t ret = -1;
-    syscall(11, (uint32_t) req, (uint32_t) &ret, 0);
-    return ret;
-}
-
 static bool sys_process_destroy(uint32_t pid) {
     bool ret = false;
     syscall(12, pid, (uint32_t) &ret, 0);
@@ -213,7 +207,7 @@ static void shell_print(const char *str, uint8_t color) {
 // ==================== 4. COMMAND IMPLEMENTATION ====================
 
 static void cmd_help(void) {
-    shell_print("Perintah: cd, ls, mkdir, cat, cp, rm, mv, find, grep, ps, exec, kill, exit, clear, help\n", 0x0E);
+    shell_print("Perintah: cd, ls, cat, mkdir, rm, cp, mv, find, grep, ps, kill, export, help\n", 0x0E);
 }
 
 static void cmd_ls(int argc, char *argv[]) {
@@ -251,7 +245,7 @@ static void cmd_cd(int argc, char *argv[]) {
 
     uint32_t target = resolve_path(argv[1]);
     if (target == 0) {
-        shell_print("cd: Direktori tidak ditemukan\n", 0x0C);
+        shell_print("cd: Gagal\n", 0x0C);
         return;
     }
     cwd_inode = target;
@@ -321,7 +315,7 @@ static void cmd_cp_mv(int argc, char *argv[], bool is_mv) {
         return;
     }
     if (is_mv) sys_delete_entry(cwd_inode, argv[1]);
-    shell_print(is_mv ? "Berhasil dipindah\n" : "Berhasil disalin\n", 0x0A);
+    shell_print("Berhasil\n", 0x0A);
 }
 
 static void dfs_find(uint32_t ino, const char *path, const char *target, int mode) {
@@ -378,25 +372,14 @@ static void dfs_find(uint32_t ino, const char *path, const char *target, int mod
 
 static void cmd_find(int argc, char *argv[]) {
     if (argc < 2) {
-        shell_print("Gunakan: find <kata> atau find -content <kata>\n", 0x0E);
+        shell_print("find <kata>\n", 0x0E);
         return;
     }
-
-    if (str_cmp(argv[1], "-name") == 0) {
-        if (argc < 3) {
-            shell_print("find: Nama file belum ditentukan\n", 0x0C);
-            return;
-        }
-        dfs_find(1, "/", argv[2], 1);
-    } else if (str_cmp(argv[1], "-content") == 0 || str_cmp(argv[1], "-c") == 0) {
-        if (argc < 3) {
-            shell_print("find: Kata belum ditentukan\n", 0x0C);
-            return;
-        }
-        dfs_find(1, "/", argv[2], 2);
-    } else {
-        dfs_find(1, "/", argv[1], 0);
-    }
+    int mode = 0;
+    const char *target = argv[1];
+    if (str_cmp(argv[1], "-name") == 0 && argc >= 3) { mode = 1; target = argv[2]; }
+    else if ((str_cmp(argv[1], "-content") == 0 || str_cmp(argv[1], "-c") == 0) && argc >= 3) { mode = 2; target = argv[2]; }
+    dfs_find(1, "/", target, mode);
 }
 
 static void cmd_grep(int argc, char *argv[], const char *pipe_in) {
@@ -469,7 +452,7 @@ static void cmd_ps(void) {
     shell_print("\n", 0x07);
 }
 
-static bool spawn_from_inode(uint32_t inode, const char *name) {
+static bool spawn_from_inode(uint32_t inode, const char *name, const char *args) {
     struct EXT2DriverRequest req = {
         .buf          = (void*) 0,
         .name         = (char*) name,
@@ -478,14 +461,16 @@ static bool spawn_from_inode(uint32_t inode, const char *name) {
         .buffer_size  = 0x4000,
         .is_directory = false,
     };
-    if (sys_process_create(&req) == 0) {
+    int32_t ret = -1;
+    syscall(11, (uint32_t) &req, (uint32_t) &ret, (uint32_t) args);
+    if (ret == 0) {
         for (volatile int i = 0; i < 3000000; i++);
         return true;
     }
     return false;
 }
 
-static bool try_exec_from_path(const char *cmd_name) {
+static bool try_exec_from_path(const char *cmd_name, const char *args) {
     if (!cmd_name || !*cmd_name) return false;
     char path_copy[128];
     str_cpy(path_copy, env_path);
@@ -497,12 +482,12 @@ static bool try_exec_from_path(const char *cmd_name) {
         *end = '\0';
         if (*dir != '\0') {
             uint32_t target = resolve_path(dir);
-            if (target != 0 && spawn_from_inode(target, cmd_name)) return true;
+            if (target != 0 && spawn_from_inode(target, cmd_name, args)) return true;
         }
         if (saved == '\0') break;
         dir = end + 1;
     }
-    if (cwd_inode != 1 && spawn_from_inode(cwd_inode, cmd_name)) return true;
+    if (cwd_inode != 1 && spawn_from_inode(cwd_inode, cmd_name, args)) return true;
     return false;
 }
 
@@ -511,7 +496,7 @@ static void cmd_exec(int argc, char *argv[]) {
         shell_print("exec <nama_file>\n", 0x0C);
         return;
     }
-    if (!try_exec_from_path(argv[1])) {
+    if (!try_exec_from_path(argv[1], NULL)) {
         shell_print("exec: Gagal\n", 0x0C);
     }
 }
@@ -615,7 +600,19 @@ static void execute_single(char *cmd, const char *p_in) {
         syscall(10, 0, 0, 0);
     }
     else {
-        if (!try_exec_from_path(argv[0])) {
+        char args_buf[128];
+        args_buf[0] = '\0';
+        if (argc > 1) {
+            char *d = args_buf;
+            for (int i = 1; i < argc; i++) {
+                char *s = argv[i];
+                while (*s && (d - args_buf) < 126) *d++ = *s++;
+                if (i < argc - 1 && (d - args_buf) < 126) *d++ = ' ';
+            }
+            *d = '\0';
+        }
+
+        if (!try_exec_from_path(argv[0], (argc > 1) ? args_buf : NULL)) {
             shell_print("Perintah tdk dikenal\n", 0x0C);
         }
     }

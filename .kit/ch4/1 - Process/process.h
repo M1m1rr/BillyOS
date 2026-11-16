@@ -64,7 +64,7 @@ struct ProcessControlBlock* process_get_current_running_pcb_pointer(void);
  * @param request Appropriate read request for the executable
  * @return        Process creation return code
  */
-int32_t process_create_user_process(struct EXT2DriverRequest request);
+int32_t process_create_user_process(struct EXT2DriverRequest request, const char *args);
 
 /**
  * Destroy process then release page directory and process control block

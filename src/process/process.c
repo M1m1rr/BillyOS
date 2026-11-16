@@ -41,7 +41,7 @@ struct ProcessControlBlock* process_get_current_running_pcb_pointer(void) {
     return NULL;
 }
 
-int32_t process_create_user_process(struct EXT2DriverRequest request) {
+int32_t process_create_user_process(struct EXT2DriverRequest request, const char *args) {
     if (process_manager_state.active_process_count >= PROCESS_COUNT_MAX) {
         return PROCESS_CREATE_FAIL_MAX_PROCESS_EXCEEDED;
     }
@@ -67,6 +67,17 @@ int32_t process_create_user_process(struct EXT2DriverRequest request) {
     memcpy(name_buffer, request.name, copy_len);
     request.name = name_buffer;
 
+    char args_buffer[128];
+    memset(args_buffer, 0, sizeof(args_buffer));
+    if (args != NULL) {
+        uint32_t alen = 0;
+        while (args[alen] && alen < sizeof(args_buffer) - 1) {
+            args_buffer[alen] = args[alen];
+            alen++;
+        }
+        args_buffer[alen] = '\0';
+    }
+
     struct PageDirectory *new_pd = paging_create_new_page_directory();
     if (!new_pd) return PROCESS_CREATE_FAIL_NOT_ENOUGH_MEMORY;
     
@@ -81,6 +92,47 @@ int32_t process_create_user_process(struct EXT2DriverRequest request) {
     paging_allocate_user_page_frame(new_pd, (void*) (0x400000 - PAGE_FRAME_SIZE));
 
     int8_t fs_ret = read(request);
+
+    uint32_t top = 0x400000;
+    char *tokens[16];
+    int argc = 0;
+    tokens[argc++] = name_buffer;
+
+    // Parse argumen menjadi token
+    char *p = args_buffer;
+    while (*p) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        if (argc < 16) tokens[argc++] = p;
+        while (*p && *p != ' ') p++;
+        if (*p) *p++ = '\0';
+    }
+
+    // 1. Simpan karakter string di bagian atas stack
+    char *str_ptrs[16];
+    for (int i = argc - 1; i >= 0; i--) {
+        uint32_t slen = 0;
+        while (tokens[i][slen]) slen++;
+        slen++;
+        top -= slen;
+        memcpy((void*) top, tokens[i], slen);
+        str_ptrs[i] = (char*) top;
+    }
+
+    // Alignment 4-byte
+    top &= ~3;
+
+    // 2. Simpan array pointer argv (diakhiri NULL)
+    top -= 4;
+    *((uint32_t*) top) = 0;
+    for (int i = argc - 1; i >= 0; i--) {
+        top -= 4;
+        *((uint32_t*) top) = (uint32_t) str_ptrs[i];
+    }
+
+    // 3. Simpan nilai argc
+    top -= 4;
+    *((uint32_t*) top) = (uint32_t) argc;
 
     paging_use_page_directory(prev_pd);
     if (fs_ret != 0) {
@@ -98,8 +150,8 @@ int32_t process_create_user_process(struct EXT2DriverRequest request) {
     new_pcb->context.cpu.segment.fs = user_data_selector;
     new_pcb->context.cpu.segment.gs = user_data_selector;
 
-    new_pcb->context.cpu.stack.esp  = 0x400000 - 4;
-    new_pcb->context.cpu.stack.ebp  = 0x400000 - 4;
+    new_pcb->context.cpu.stack.esp  = top;
+    new_pcb->context.cpu.stack.ebp  = top;
 
     new_pcb->metadata.pid   = process_generate_new_pid();
     new_pcb->metadata.state = PROCESS_STATE_READY;

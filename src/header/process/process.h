@@ -56,7 +56,7 @@ struct ProcessControlBlock {
 extern struct ProcessControlBlock _process_list[PROCESS_COUNT_MAX];
 
 struct ProcessControlBlock* process_get_current_running_pcb_pointer(void);
-int32_t process_create_user_process(struct EXT2DriverRequest request);
+int32_t process_create_user_process(struct EXT2DriverRequest request, const char *args);
 bool process_destroy(uint32_t pid);
 
 #endif

@@ -180,7 +180,7 @@ void kernel_setup(void) {
         .buffer_size  = 0x4000,
         .is_directory = false
     };
-    int32_t p_res = process_create_user_process(req_shell);
+    int32_t p_res = process_create_user_process(req_shell, NULL);
     test_assert(&row, &col, "U1: Create User Process 'shell' (Exp 0)", p_res, PROCESS_CREATE_SUCCESS);
 
     if (p_res != PROCESS_CREATE_SUCCESS) {
