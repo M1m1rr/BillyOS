@@ -11,9 +11,6 @@ static void print_str(const char *s, uint8_t color) {
 }
 
 int main(void) {
-    print_str("==============================================\n", 0x0B);
-    print_str("  Hello World from BillyOS External Program!  \n", 0x0E);
-    print_str("  Ring 3 Execution | Dynamic Paging Verified  \n", 0x0A);
-    print_str("==============================================\n", 0x0B);
+    print_str("Hello World - BillyOS \n", 0x0E);
     return 0;
 }

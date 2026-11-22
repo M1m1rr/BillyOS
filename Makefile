@@ -129,3 +129,4 @@ insert-shell: inserter user-shell user-hello user-loop user-clock user-fib user-
 	@cd $(OUTPUT_FOLDER); ./inserter -f clock 1 $(DISK_NAME).bin
 	@cd $(OUTPUT_FOLDER); ./inserter -f fib 1 $(DISK_NAME).bin
 	@cd $(OUTPUT_FOLDER); ./inserter -f echo 1 $(DISK_NAME).bin
+	@./bin/inserter -f banner 1 bin/$(DISK_NAME).bin

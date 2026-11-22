@@ -653,7 +653,11 @@ int main(void) {
 
     env_load();
 
-    sys_puts("=== BillyOS Shell (User Mode) ===\nKetik 'help' untuk daftar perintah.\n\n", 0x0B);
+    if (sys_read_file(1, "banner", sh_buf, sizeof(sh_buf) - 1) == 0 && sh_buf[0] != '\0') {
+        sys_puts((char*) sh_buf, 0x0B);
+    } else {
+        sys_puts("=== BillyOS Shell ===\n\n", 0x0B);
+    }
 
     char line[MAX_LINE_LEN];
     uint32_t idx = 0;
