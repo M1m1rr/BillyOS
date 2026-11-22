@@ -9,6 +9,7 @@
 #include "header/driver/keyboard.h"
 #include "header/driver/cmos.h"
 #include "header/driver/vga.h"
+#include "header/filesystem/bfs.h"
 
 void io_wait(void) {
     out(0x80, 0);
@@ -190,7 +191,64 @@ static void syscall(struct InterruptFrame frame) {
                 (uint8_t) (frame.cpu.general.edx & 0xFF)
             );
             break;
-    }
+        case 19: {
+            // Syscall 19: BillyFS & B+ Tree Indexing Interface Multiplexer
+            // EBX = pointer struct BFSRequest
+            // ECX = pointer int32_t ret (hasil eksekusi)
+            struct BFSRequest *req = (struct BFSRequest*) frame.cpu.general.ebx;
+            int32_t ret = -1;
+
+            if (req != NULL) {
+                switch (req->cmd) {
+                    case 0: // Info Superblock
+                        if (req->buf != NULL) {
+                            read_blocks(req->buf, BFS_START_LBA, 1);
+                            ret = 0;
+                        }
+                        break;
+                    case 1: // Create
+                        if (req->name != NULL) {
+                            ret = bfs_create(req->parent_id, req->name, req->is_dir);
+                        }
+                        break;
+                    case 2: // Write
+                        if (req->name != NULL && req->buf != NULL) {
+                            ret = bfs_write(req->parent_id, req->name, req->buf, req->size);
+                        }
+                        break;
+                    case 3: // Read
+                        if (req->name != NULL && req->buf != NULL) {
+                            ret = bfs_read(req->parent_id, req->name, req->buf, req->size);
+                        }
+                        break;
+                    case 4: // Delete
+                        if (req->name != NULL) {
+                            ret = bfs_delete(req->parent_id, req->name);
+                        }
+                        break;
+                    case 5: // Read Directory
+                        if (req->buf != NULL) {
+                            ret = bfs_read_dir(req->parent_id, (struct BFSEntry*) req->buf, req->size);
+                        }
+                        break;
+                    case 6: // B+ Tree Index Find O(log N)
+                        if (req->name != NULL) {
+                            ret = bfs_find_indexed(req->name);
+                        }
+                        break;
+                    default:
+                        ret = -1;
+                        break;
+                }
+            }
+
+            // Kembalikan status eksekusi via pointer di ECX (standar arsitektur BillyOS)
+            if (frame.cpu.general.ecx != 0) {
+                *((int32_t*) frame.cpu.general.ecx) = ret;
+            }
+            break;
+        }
+    }   
 }
 
 void main_interrupt_handler(struct InterruptFrame frame) {

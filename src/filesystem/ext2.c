@@ -312,15 +312,29 @@ int8_t read(struct EXT2DriverRequest request) {
         return 2; // Buffer tidak cukup
     }
 
-    // 5. Baca semua blok data file (Direct Blocks 0..11)
+    // 5. Baca semua blok data file (Direct Blocks 0..11 + Singly Indirect Block 12)
     uint32_t bytes_to_read = target_node.i_size;
     uint32_t bytes_read = 0;
     struct BlockBuffer b;
+    uint32_t indirect_table[BLOCK_SIZE / 4];
+    bool indirect_loaded = false;
+    uint32_t blocks_needed = (bytes_to_read + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
-    for (uint32_t i = 0; i < 12 && bytes_read < bytes_to_read; i++) {
-        if (target_node.i_block[i] == 0) break;
+    for (uint32_t i = 0; i < blocks_needed; i++) {
+        uint32_t blk = 0;
+        if (i < 12) {
+            blk = target_node.i_block[i];
+        } else {
+            if (!indirect_loaded) {
+                if (target_node.i_block[12] == 0) break;
+                read_blocks(indirect_table, target_node.i_block[12], 1);
+                indirect_loaded = true;
+            }
+            blk = indirect_table[i - 12];
+        }
+        if (blk == 0) break;
 
-        read_blocks(&b, target_node.i_block[i], 1);
+        read_blocks(&b, blk, 1);
         uint32_t chunk = (bytes_to_read - bytes_read > BLOCK_SIZE) ? BLOCK_SIZE : (bytes_to_read - bytes_read);
         memcpy((uint8_t *)request.buf + bytes_read, b.buf, chunk);
         bytes_read += chunk;
@@ -485,9 +499,9 @@ int8_t write(struct EXT2DriverRequest *request) {
         // Tambahkan ke parent directory
         add_directory_entry(&parent_node, new_inode_num, request->name, request->name_len, EXT2_FT_DIR);
     } else {
-        // --- MEMBUAT FILE ---
+                // --- MEMBUAT FILE (Mendukung Direct + Singly Indirect Block hingga 70 KB) ---
         uint32_t blocks_needed = (request->buffer_size + BLOCK_SIZE - 1) / BLOCK_SIZE;
-        if (blocks_needed > 12) return -1; // Batasan direct block
+        if (blocks_needed > 12 + (BLOCK_SIZE / 4)) return -1; // Maks 140 blok
 
         new_node.i_mode   = EXT2_S_IFREG | EXT2_FT_REG_FILE;
         new_node.i_size   = request->buffer_size;
@@ -495,17 +509,35 @@ int8_t write(struct EXT2DriverRequest *request) {
 
         uint32_t bytes_written = 0;
         struct BlockBuffer b;
+        uint32_t indirect_table[BLOCK_SIZE / 4];
+        uint32_t indirect_lba = 0;
+
+        if (blocks_needed > 12) {
+            indirect_lba = allocate_single_block();
+            if (indirect_lba == 0) return -1;
+            new_node.i_block[12] = indirect_lba;
+            memset(indirect_table, 0, BLOCK_SIZE);
+        }
 
         for (uint32_t i = 0; i < blocks_needed; i++) {
             uint32_t block_lba = allocate_single_block();
             if (block_lba == 0) return -1;
-            new_node.i_block[i] = block_lba;
+
+            if (i < 12) {
+                new_node.i_block[i] = block_lba;
+            } else {
+                indirect_table[i - 12] = block_lba;
+            }
 
             memset(&b, 0, BLOCK_SIZE);
             uint32_t chunk = (request->buffer_size - bytes_written > BLOCK_SIZE) ? BLOCK_SIZE : (request->buffer_size - bytes_written);
             memcpy(b.buf, (uint8_t *)request->buf + bytes_written, chunk);
             write_blocks(&b, block_lba, 1);
             bytes_written += chunk;
+        }
+
+        if (indirect_lba != 0) {
+            write_blocks(indirect_table, indirect_lba, 1);
         }
 
         sync_node(&new_node, new_inode_num);

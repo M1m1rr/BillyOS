@@ -46,6 +46,7 @@ kernel:
 	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/header/driver/disk.c -o $(OUTPUT_FOLDER)/disk.o
 	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/header/driver/cmos.c -o $(OUTPUT_FOLDER)/cmos.o
 	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/filesystem/ext2.c -o $(OUTPUT_FOLDER)/ext2.o
+	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/filesystem/bfs.c -o $(OUTPUT_FOLDER)/bfs.o
 	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/memory/paging.c -o $(OUTPUT_FOLDER)/paging.o
 	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/stdlib/string.c -o $(OUTPUT_FOLDER)/string.o
 	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/memory/swap.c -o $(OUTPUT_FOLDER)/swap.o

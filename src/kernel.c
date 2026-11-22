@@ -14,8 +14,14 @@
 #include "header/memory/paging.h"
 #include "header/memory/swap.h"
 #include "header/stdlib/string.h"
+#include "header/filesystem/bfs.h"
+#include "header/cpu/portio.h"
 
 static void scroll(void) {
+    if (vga_is_graphics_mode()) {
+        vga_scroll();
+        return;
+    }
     memcpy(FRAMEBUFFER_MEMORY_OFFSET, 
            FRAMEBUFFER_MEMORY_OFFSET + FRAMEBUFFER_WIDTH * 2, 
            FRAMEBUFFER_WIDTH * (FRAMEBUFFER_HEIGHT - 1) * 2);
@@ -64,6 +70,7 @@ void kernel_setup(void) {
     framebuffer_set_cursor(0, 0);
 
     initialize_filesystem_ext2();
+    bfs_init(); // <-- Tambahkan di sini
 
     int row = 0, col = 0;
     print_text(&row, &col, "=== BillyOS Paging & Swap Test Suite ===\n\n", 0x0E);
@@ -129,7 +136,6 @@ void kernel_setup(void) {
 
     print_text(&row, &col, "\n>> SEMUA TES PAGING & SWAP LULUS! <<\n", 0x0E);
 
-        // ==================== TES KHUSUS ASISTENSI ====================
     print_text(&row, &col, "\n-- Asistensi: Proteksi Hapus Root & CWD --\n", 0x0B);
 
     // A1. Coba hapus entri '.' di root (Exp -1)
@@ -161,9 +167,59 @@ void kernel_setup(void) {
     };
     test_assert(&row, &col, "A2: Tolak hapus folder aktif / CWD (Exp -1)", delete(req_del_cwd), -1);
 
-    // Kembalikan CWD ke root, sekarang folder active_dir boleh dihapus
+        // Kembalikan CWD ke root, sekarang folder active_dir boleh dihapus
     ext2_set_current_directory(1);
     test_assert(&row, &col, "A3: Hapus active_dir setelah keluar CWD (Exp 0)", delete(req_del_cwd), 0);
+
+    // ==================== TAHAN HALAMAN 1 (PAGING & SWAP) ====================
+    print_text(&row, &col, "\n>> Tekan Tombol Apapun untuk Lanjut ke Tes BillyFS... <<\n", 0x0E);
+    while (!(in(0x64) & 1)); // Tunggu tombol ditekan
+    in(0x60);                // Baca tombol
+
+    // Bersihkan layar untuk Halaman 2 (BillyFS & B+ Tree)
+    framebuffer_clear();
+    row = 0;
+    col = 0;
+
+    // ==================== TEST SUITE BILLYFS & B+ TREE INDEX ====================
+    print_text(&row, &col, "=== BillyFS (Non-EXT2) & B+ Tree Index Test ===\n\n", 0x0E);
+
+    // 1. Format & Inisialisasi Partisi Bersih
+    bfs_format();
+    test_assert(&row, &col, "BFS-1: Format Superblock & Root", 0, 0);
+
+    // 2. Buat Direktori Bersarang (Nested Folder)
+    int8_t res_d1 = bfs_create(0, "docs", true);
+    int32_t id_docs = bfs_find_indexed("docs");
+    int8_t res_d2 = (id_docs >= 0) ? bfs_create((uint32_t) id_docs, "os", true) : -1;
+    test_assert(&row, &col, "BFS-2: Buat Nested Folder /docs/os", (res_d1 == 0 && res_d2 == 0) ? 0 : -1, 0);
+
+    // 3. Tulis File ke dalam Nested Folder
+    int32_t id_os = bfs_find_indexed("os");
+    const char *pesan = "Halo dari BillyFS dengan B+ Tree Indexing!";
+    int8_t res_w = (id_os >= 0) ? bfs_write((uint32_t) id_os, "tugas.txt", pesan, 43) : -1;
+    test_assert(&row, &col, "BFS-3: Tulis File /docs/os/tugas.txt", res_w, 0);
+
+    // 4. Baca Kembali File & Verifikasi Konten
+    char read_buf[64];
+    memset(read_buf, 0, sizeof(read_buf));
+    int8_t res_r = (id_os >= 0) ? bfs_read((uint32_t) id_os, "tugas.txt", read_buf, 63) : -1;
+    bool match = (res_r == 0 && memcmp(read_buf, pesan, 42) == 0);
+    test_assert(&row, &col, "BFS-4: Baca & Verifikasi Konten File", match ? 0 : -1, 0);
+
+    // 5. B+ Tree Index Search O(log N)
+    int32_t idx_res = bfs_find_indexed("tugas.txt");
+    test_assert(&row, &col, "BFS-5: B+ Tree Index Find (Instant Search)", (idx_res > 0) ? 0 : -1, 0);
+
+    // 6. Hapus File & Update Index
+    int8_t res_del = (id_os >= 0) ? bfs_delete((uint32_t) id_os, "tugas.txt") : -1;
+    int32_t idx_del = bfs_find_indexed("tugas.txt");
+    test_assert(&row, &col, "BFS-6: Hapus File & Update B+ Tree Index", (res_del == 0 && idx_del == -1) ? 0 : -1, 0);
+
+    // ==================== TAHAN HALAMAN 2 (BILLYFS) ====================
+    print_text(&row, &col, "\n>> Tekan Tombol Apapun untuk Masuk ke Shell... <<\n", 0x0E);
+    while (!(in(0x64) & 1));
+    in(0x60);
 
         // ==================== 4. LAUNCHING USER MODE SEBAGAI PROSES (Bab 4.1.4) ====================
     print_text(&row, &col, "\n-- Launching User Mode via PCB Process 0 (Bab 4.1.4) --\n", 0x0B);

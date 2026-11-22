@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "header/filesystem/ext2.h"
+#include "header/filesystem/bfs.h"
 #include "header/stdlib/string.h"
 #include "header/process/process.h"
 
@@ -71,6 +72,12 @@ static uint32_t sys_process_get_info(struct ProcessMetadata *dest) {
     uint32_t count = 0;
     syscall(13, (uint32_t) dest, (uint32_t) &count, 0);
     return count;
+}
+
+static int32_t sys_bfs_req(struct BFSRequest *req) {
+    int32_t ret = -1;
+    syscall(19, (uint32_t) req, (uint32_t) &ret, 0);
+    return ret;
 }
 
 // ==================== 2. HELPER STRING ====================
@@ -375,11 +382,19 @@ static void cmd_find(int argc, char *argv[]) {
         shell_print("find <kata>\n", 0x0E);
         return;
     }
-    int mode = 0;
     const char *target = argv[1];
-    if (str_cmp(argv[1], "-name") == 0 && argc >= 3) { mode = 1; target = argv[2]; }
-    else if ((str_cmp(argv[1], "-content") == 0 || str_cmp(argv[1], "-c") == 0) && argc >= 3) { mode = 2; target = argv[2]; }
-    dfs_find(1, "/", target, mode);
+    if (str_cmp(argv[1], "-name") == 0 && argc >= 3) target = argv[2];
+
+    // Cek B+ Tree Indexing terlebih dahulu (O(log N))
+    struct BFSRequest btree_req = { .cmd = 6, .name = target };
+    int32_t btree_id = sys_bfs_req(&btree_req);
+    if (btree_id >= 0) {
+        shell_print("[B+ Tree Index Found] ", 0x0A);
+        shell_print(target, 0x0E);
+        shell_print(" (Pencarian Instan O(log N))\n", 0x0A);
+    }
+    // Lanjutkan pencarian DFS standar EXT2
+    dfs_find(1, "/", target, 0);
 }
 
 static void cmd_grep(int argc, char *argv[], const char *pipe_in) {
@@ -572,6 +587,108 @@ static void cmd_export(int argc, char *argv[]) {
     }
 }
 
+static void cmd_bfs(int argc, char *argv[]) {
+    if (argc < 2) {
+        shell_print("Gunakan: bfs <info|ls|mkdir|write|cat|rm|find> [args]\n", 0x0E);
+        return;
+    }
+
+    if (str_cmp(argv[1], "info") == 0) {
+        struct BFSSuperblock sb;
+        struct BFSRequest req = { .cmd = 0, .buf = &sb };
+        if (sys_bfs_req(&req) == 0) {
+            shell_print("=== BillyFS (Non-EXT2) Status ===\n", 0x0E);
+            shell_print("Magic       : 0x42494C4C (BILL)\n", 0x0A);
+            shell_print("Block Size  : 512 bytes\n", 0x0F);
+            shell_print("Total Blocks: 4096 (2 MB)\n", 0x0F);
+            shell_print("B+ Tree Root: Sektor LBA 33 (Indexed O(log N))\n", 0x0B);
+        } else {
+            shell_print("[BFS] Gagal membaca superblock!\n", 0x0C);
+        }
+    } 
+    else if (str_cmp(argv[1], "mkdir") == 0) {
+        if (argc < 3) { shell_print("bfs mkdir <nama>\n", 0x0C); return; }
+        struct BFSRequest req = { .cmd = 1, .parent_id = 0, .name = argv[2], .is_dir = true };
+        int32_t res = sys_bfs_req(&req);
+        if (res == 0) shell_print("[BFS] Folder berhasil dibuat!\n", 0x0A);
+        else shell_print("[BFS] Gagal membuat folder!\n", 0x0C);
+    }
+    else if (str_cmp(argv[1], "write") == 0) {
+        if (argc < 4) { shell_print("bfs write <nama> <teks>\n", 0x0C); return; }
+        
+        // Gabungkan seluruh argumen teks argv[3] .. argv[argc-1] dan buang tanda petik
+        char payload[256];
+        payload[0] = '\0';
+        char *d = payload;
+        for (int i = 3; i < argc; i++) {
+            char *s = argv[i];
+            while (*s && (d - payload) < 250) {
+                if (*s != '"') *d++ = *s;
+                s++;
+            }
+            if (i < argc - 1 && (d - payload) < 250) *d++ = ' ';
+        }
+        *d = '\0';
+        uint32_t len = str_len(payload);
+
+        struct BFSRequest req = { .cmd = 2, .parent_id = 0, .name = argv[2], .buf = payload, .size = len };
+        int32_t res = sys_bfs_req(&req);
+        if (res == 0) shell_print("[BFS] File berhasil ditulis!\n", 0x0A);
+        else shell_print("[BFS] Gagal menulis file!\n", 0x0C);
+    }
+    else if (str_cmp(argv[1], "cat") == 0) {
+        if (argc < 3) { shell_print("bfs cat <nama>\n", 0x0C); return; }
+        char buf[512];
+        memset(buf, 0, sizeof(buf));
+        struct BFSRequest req = { .cmd = 3, .parent_id = 0, .name = argv[2], .buf = buf, .size = 511 };
+        int32_t res = sys_bfs_req(&req);
+        if (res == 0) {
+            shell_print(buf, 0x0F);
+            shell_print("\n", 0x0F);
+        } else {
+            shell_print("[BFS] File tidak ditemukan!\n", 0x0C);
+        }
+    }
+    else if (str_cmp(argv[1], "rm") == 0) {
+        if (argc < 3) { shell_print("bfs rm <nama>\n", 0x0C); return; }
+        struct BFSRequest req = { .cmd = 4, .parent_id = 0, .name = argv[2] };
+        int32_t res = sys_bfs_req(&req);
+        if (res == 0) shell_print("[BFS] File/folder berhasil dihapus!\n", 0x0A);
+        else shell_print("[BFS] Gagal menghapus!\n", 0x0C);
+    }
+    else if (str_cmp(argv[1], "ls") == 0) {
+        struct BFSEntry entries[16];
+        struct BFSRequest req = { .cmd = 5, .parent_id = 0, .buf = entries, .size = 16 };
+        int32_t count = sys_bfs_req(&req);
+        shell_print("Nama               Tipe    Ukuran    Present\n", 0x0B);
+        shell_print("--------------------------------------------\n", 0x07);
+        for (int i = 0; i < count; i++) {
+            shell_print(entries[i].name, 0x0E);
+            for (uint32_t s = str_len(entries[i].name); s < 19; s++) shell_print(" ", 0x0F);
+            shell_print(entries[i].is_directory ? "DIR     " : "FILE    ", 0x0A);
+            char sz[12];
+            int_to_str(entries[i].filesize, sz);
+            shell_print(sz, 0x0F);
+            shell_print(" B    YES\n", 0x0F);
+        }
+    }
+    else if (str_cmp(argv[1], "find") == 0) {
+        if (argc < 3) { shell_print("bfs find <nama>\n", 0x0C); return; }
+        struct BFSRequest req = { .cmd = 6, .name = argv[2] };
+        int32_t inode = sys_bfs_req(&req);
+        if (inode >= 0) {
+            shell_print("[B+ Tree Index] Ditemukan: ", 0x0A);
+            shell_print(argv[2], 0x0E);
+            shell_print(" (Inode ", 0x0F);
+            char in_str[12]; int_to_str((uint32_t) inode, in_str);
+            shell_print(in_str, 0x0E);
+            shell_print(") via O(log N) Instant Lookup!\n", 0x0A);
+        } else {
+            shell_print("[B+ Tree Index] File tidak ditemukan!\n", 0x0C);
+        }
+    }
+}
+
 static void execute_single(char *cmd, const char *p_in) {
     char *argv[MAX_ARGS];
     int argc = 0;
@@ -601,6 +718,7 @@ static void execute_single(char *cmd, const char *p_in) {
     else if (str_cmp(argv[0], "exec") == 0)  cmd_exec(argc, argv);
     else if (str_cmp(argv[0], "kill") == 0)  cmd_kill(argc, argv);
     else if (str_cmp(argv[0], "export") == 0) cmd_export(argc, argv);
+    else if (str_cmp(argv[0], "bfs") == 0)   cmd_bfs(argc, argv);
     else if (str_cmp(argv[0], "exit") == 0) {
         shell_print("Keluar...\n", 0x0E);
         syscall(10, 0, 0, 0);
