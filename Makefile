@@ -41,6 +41,7 @@ kernel:
 	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/header/cpu/idt.c -o $(OUTPUT_FOLDER)/idt.o
 	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/header/cpu/interrupt.c -o $(OUTPUT_FOLDER)/interrupt.o
 	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/header/driver/framebuffer.c -o $(OUTPUT_FOLDER)/framebuffer.o
+	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/header/driver/vga.c -o $(OUTPUT_FOLDER)/vga.o
 	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/header/driver/keyboard.c -o $(OUTPUT_FOLDER)/keyboard.o
 	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/header/driver/disk.c -o $(OUTPUT_FOLDER)/disk.o
 	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/header/driver/cmos.c -o $(OUTPUT_FOLDER)/cmos.o
@@ -121,7 +122,15 @@ user-echo:
 	@echo Linking object echo...
 	@rm -f *.o
 
-insert-shell: inserter user-shell user-hello user-loop user-clock user-fib user-echo
+user-draw:
+	@$(ASM) $(AFLAGS) $(SOURCE_FOLDER)/crt0.s -o crt0.o
+	@$(CC)  $(CFLAGS) -Os -fno-pie $(SOURCE_FOLDER)/user-draw.c -o user-draw.o
+	@$(LIN) -T $(SOURCE_FOLDER)/user-linker.ld -melf_i386 --oformat=binary \
+		crt0.o user-draw.o -o $(OUTPUT_FOLDER)/draw
+	@echo Linking object draw...
+	@rm -f *.o
+
+insert-shell: inserter user-shell user-hello user-loop user-clock user-fib user-echo user-draw
 	@echo Inserting binaries into root directory...
 	@cd $(OUTPUT_FOLDER); ./inserter -f shell 1 $(DISK_NAME).bin
 	@cd $(OUTPUT_FOLDER); ./inserter -f hello 1 $(DISK_NAME).bin
@@ -129,4 +138,5 @@ insert-shell: inserter user-shell user-hello user-loop user-clock user-fib user-
 	@cd $(OUTPUT_FOLDER); ./inserter -f clock 1 $(DISK_NAME).bin
 	@cd $(OUTPUT_FOLDER); ./inserter -f fib 1 $(DISK_NAME).bin
 	@cd $(OUTPUT_FOLDER); ./inserter -f echo 1 $(DISK_NAME).bin
+	@cd $(OUTPUT_FOLDER); ./inserter -f draw 1 $(DISK_NAME).bin
 	@./bin/inserter -f banner 1 bin/$(DISK_NAME).bin

@@ -5,6 +5,7 @@
 #include "header/cpu/gdt.h"
 #include "header/kernel-entrypoint.h"
 #include "header/driver/framebuffer.h"
+#include "header/driver/vga.h"
 #include "header/cpu/interrupt.h"
 #include "header/cpu/idt.h"
 #include "header/driver/keyboard.h"
@@ -58,6 +59,7 @@ void kernel_setup(void) {
     pic_remap();
     initialize_idt();
     activate_keyboard_interrupt();
+    vga_init_graphics_mode();
     framebuffer_clear();
     framebuffer_set_cursor(0, 0);
 

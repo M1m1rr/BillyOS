@@ -8,6 +8,7 @@
 #include "header/driver/framebuffer.h"
 #include "header/driver/keyboard.h"
 #include "header/driver/cmos.h"
+#include "header/driver/vga.h"
 
 void io_wait(void) {
     out(0x80, 0);
@@ -167,6 +168,28 @@ static void syscall(struct InterruptFrame frame) {
             }
             break;
         }
+        case 16:
+            vga_put_pixel(frame.cpu.general.ebx, frame.cpu.general.ecx, (uint8_t) frame.cpu.general.edx);
+            break;
+        case 17:
+            vga_draw_rect(
+                (int) (frame.cpu.general.ebx >> 16),
+                (int) (frame.cpu.general.ebx & 0xFFFF),
+                (int) (frame.cpu.general.ecx >> 16),
+                (int) (frame.cpu.general.ecx & 0xFFFF),
+                (uint8_t) (frame.cpu.general.edx & 0xFF),
+                (bool) ((frame.cpu.general.edx >> 8) & 0x1)
+            );
+            break;
+        case 18:
+            vga_draw_line(
+                (int) (frame.cpu.general.ebx >> 16),
+                (int) (frame.cpu.general.ebx & 0xFFFF),
+                (int) (frame.cpu.general.ecx >> 16),
+                (int) (frame.cpu.general.ecx & 0xFFFF),
+                (uint8_t) (frame.cpu.general.edx & 0xFF)
+            );
+            break;
     }
 }
 

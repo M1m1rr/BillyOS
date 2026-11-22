@@ -131,7 +131,7 @@ static char     env_path[64];
 static uint32_t cwd_inode;
 static char     cwd_path[64];
 
-static uint8_t  sh_buf[1024];
+static uint8_t  sh_buf[2048];
 static char     pipe_buf[1024]; 
 static uint32_t pipe_len = 0;
 static bool     pipe_mode = false;
