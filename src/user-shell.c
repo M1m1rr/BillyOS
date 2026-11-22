@@ -472,6 +472,12 @@ static bool spawn_from_inode(uint32_t inode, const char *name, const char *args)
 
 static bool try_exec_from_path(const char *cmd_name, const char *args) {
     if (!cmd_name || !*cmd_name) return false;
+
+    if (str_cmp(cmd_name, "shell") == 0) {
+        shell_print("Shell sudah aktif!\n", 0x0C);
+        return true;
+    }
+
     char path_copy[128];
     str_cpy(path_copy, env_path);
     char *dir = path_copy;
