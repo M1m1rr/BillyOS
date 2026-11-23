@@ -235,100 +235,100 @@ static void sync_palette(void) {
 }
 
 // ==================== 5. KEYBOARD INPUT CONTROLLER ====================
-// Hold-Timer: Saat tombol ditekan, DOOM_KEY_DOWN dipanggil dan tombol
-// "ditahan" selama KEY_HOLD_FRAMES. Saat timer habis, DOOM_KEY_UP dipanggil.
-// Jika tombol ditekan lagi (auto-repeat), timer di-refresh.
+// Status tombol dibaca langsung dari driver (syscall 23), yang mencatat make code
+// (tekan) DAN break code (lepas). Jadi:
+//  - tidak ada lagi delay auto-repeat keyboard sebelum karakter bergerak,
+//  - beberapa tombol bisa ditahan bersamaan (maju + belok + tembak + lari, dll).
+// doom_key_down dipanggil saat tombol baru ditekan, doom_key_up saat dilepas.
 
-#define KEY_HOLD_FRAMES 8    // Tahan 8 frame (~228ms pada 35 FPS)
-#define MAX_HELD_KEYS   12   // Maks tombol bersamaan
-
-static struct {
-    int doom_key;
-    int timer;
-} held_keys[MAX_HELD_KEYS];
-static int num_held = 0;
-
-static void press_key(int doom_key) {
-    // Jika sudah ditahan, refresh timer
-    for (int i = 0; i < num_held; i++) {
-        if (held_keys[i].doom_key == doom_key) {
-            held_keys[i].timer = KEY_HOLD_FRAMES;
-            return;
-        }
-    }
-    // Tombol baru
-    if (num_held < MAX_HELD_KEYS) {
-        doom_key_down(doom_key);
-        held_keys[num_held].doom_key = doom_key;
-        held_keys[num_held].timer = KEY_HOLD_FRAMES;
-        num_held++;
-    }
+static void sys_get_key_state(uint8_t *out256) {
+    syscall(23, (uint32_t) out256, 0, 0);
 }
 
+static uint32_t sys_ms(void) {
+    uint32_t t = 0;
+    syscall(22, (uint32_t) &t, 0, 0);
+    return t;
+}
+
+#define EXT 128   // offset untuk scancode extended (E0 xx)
+
+static const struct { uint16_t idx; int doom_key; } keymap[] = {
+    // === GERAKAN ===
+    { 0x11,       DOOM_KEY_UP_ARROW    },  // W
+    { EXT + 0x48, DOOM_KEY_UP_ARROW    },  // Panah atas
+    { 0x1F,       DOOM_KEY_DOWN_ARROW  },  // S
+    { EXT + 0x50, DOOM_KEY_DOWN_ARROW  },  // Panah bawah
+    { 0x1E,       DOOM_KEY_LEFT_ARROW  },  // A  (belok kiri)
+    { EXT + 0x4B, DOOM_KEY_LEFT_ARROW  },  // Panah kiri
+    { 0x20,       DOOM_KEY_RIGHT_ARROW },  // D  (belok kanan)
+    { EXT + 0x4D, DOOM_KEY_RIGHT_ARROW },  // Panah kanan
+    { 0x2C,       DOOM_KEY_COMMA       },  // Z  (geser/strafe kiri)
+    { 0x2D,       DOOM_KEY_PERIOD      },  // X  (geser/strafe kanan)
+    { 0x38,       DOOM_KEY_ALT         },  // Alt + panah = strafe
+
+    // === AKSI ===
+    { 0x1D,       DOOM_KEY_CTRL        },  // Ctrl kiri (tembak)
+    { EXT + 0x1D, DOOM_KEY_CTRL        },  // Ctrl kanan
+    { 0x21,       DOOM_KEY_CTRL        },  // F (tembak)
+    { 0x39,       DOOM_KEY_SPACE       },  // Space (buka pintu)
+    { 0x12,       DOOM_KEY_SPACE       },  // E (buka pintu)
+    { 0x2A,       DOOM_KEY_SHIFT       },  // Shift kiri (lari)
+    { 0x36,       DOOM_KEY_SHIFT       },  // Shift kanan
+    { 0x13,       DOOM_KEY_SHIFT       },  // R (lari)
+
+    // === MENU ===
+    { 0x1C,       DOOM_KEY_ENTER       },
+    { EXT + 0x1C, DOOM_KEY_ENTER       },  // Enter numpad
+    { 0x01,       DOOM_KEY_ESCAPE      },
+    { 0x0E,       DOOM_KEY_BACKSPACE   },
+    { 0x15,       DOOM_KEY_Y           },
+    { 0x31,       DOOM_KEY_N           },
+
+    // === SENJATA 1-7 ===
+    { 0x02, DOOM_KEY_1 }, { 0x03, DOOM_KEY_2 }, { 0x04, DOOM_KEY_3 },
+    { 0x05, DOOM_KEY_4 }, { 0x06, DOOM_KEY_5 }, { 0x07, DOOM_KEY_6 },
+    { 0x08, DOOM_KEY_7 },
+
+    // === LAINNYA ===
+    { 0x0F,       DOOM_KEY_TAB         },  // Peta / automap
+    { 0x0D,       DOOM_KEY_EQUALS      },  // Zoom in layar
+    { 0x0C,       DOOM_KEY_MINUS       },  // Zoom out layar
+};
+#define KEYMAP_COUNT ((int)(sizeof(keymap) / sizeof(keymap[0])))
+
+static uint8_t key_state_now[256];
+static uint8_t doom_key_held[KEYMAP_COUNT];   // status terakhir yang dikirim ke DOOM
+
 static void handle_input(void) {
-    // 1. Kurangi timer, lepas tombol yang sudah expired
-    for (int i = 0; i < num_held; ) {
-        held_keys[i].timer--;
-        if (held_keys[i].timer <= 0) {
-            doom_key_up(held_keys[i].doom_key);
-            held_keys[i] = held_keys[num_held - 1];
-            num_held--;
-        } else {
-            i++;
+    sys_get_key_state(key_state_now);
+
+    // Buang isi ring buffer karakter supaya tidak "bocor" ke shell setelah DOOM keluar
+    while (sys_get_char() != 0) { }
+
+    for (int i = 0; i < KEYMAP_COUNT; i++) {
+        // Beberapa tombol fisik bisa memetakan ke tombol DOOM yang sama (W & panah atas).
+        // Proses hanya di entri pertama dan gabungkan (OR) semua tombol fisiknya.
+        bool first = true;
+        for (int j = 0; j < i; j++) {
+            if (keymap[j].doom_key == keymap[i].doom_key) { first = false; break; }
         }
-    }
+        if (!first) continue;
 
-    // 2. Baca SEMUA karakter dari ring buffer keyboard
-    char c = 0;
-    while ((c = sys_get_char()) != 0) {
-        switch ((uint8_t) c) {
-            // === GERAKAN ===
-            case 0xAD: case 'w': case 'W':  // Maju
-                press_key(DOOM_KEY_UP_ARROW); break;
-            case 0xAF: case 's': case 'S':  // Mundur
-                press_key(DOOM_KEY_DOWN_ARROW); break;
-            case 0xAC: case 'a': case 'A':  // Belok kiri
-                press_key(DOOM_KEY_LEFT_ARROW); break;
-            case 0xAE: case 'd': case 'D':  // Belok kanan
-                press_key(DOOM_KEY_RIGHT_ARROW); break;
+        bool down = false;
+        for (int j = i; j < KEYMAP_COUNT; j++) {
+            if (keymap[j].doom_key == keymap[i].doom_key && key_state_now[keymap[j].idx]) {
+                down = true;
+                break;
+            }
+        }
 
-            // === AKSI ===
-            case 0x9D:                      // Left Ctrl (tembak)
-            case 'f': case 'F':             // F juga tembak
-                press_key(DOOM_KEY_CTRL); break;
-            case ' ':                       // Space (buka pintu / pakai)
-            case 'e': case 'E':             // E juga buka pintu
-                press_key(DOOM_KEY_SPACE); break;
-            case 0x9E:                      // Shift (lari cepat!)
-            case 'r': case 'R':             // R juga lari
-                press_key(DOOM_KEY_SHIFT); break;
-
-            // === MENU ===
-            case '\n': case '\r':           // Enter (konfirmasi menu)
-                press_key(DOOM_KEY_ENTER); break;
-            case 0x1B:                      // Escape (menu / batal)
-                press_key(DOOM_KEY_ESCAPE); break;
-            case 'y': case 'Y':             // Y (konfirmasi quit)
-                press_key(DOOM_KEY_Y); break;
-
-            // === SENJATA 1-7 ===
-            case '1': press_key(DOOM_KEY_1); break;  // Tinju / Gergaji
-            case '2': press_key(DOOM_KEY_2); break;  // Pistol
-            case '3': press_key(DOOM_KEY_3); break;  // Shotgun
-            case '4': press_key(DOOM_KEY_4); break;  // Chaingun
-            case '5': press_key(DOOM_KEY_5); break;  // Rocket Launcher
-            case '6': press_key(DOOM_KEY_6); break;  // Plasma Gun
-            case '7': press_key(DOOM_KEY_7); break;  // BFG 9000
-
-            // === LAINNYA ===
-            case '\t':                      // Tab (peta / automap)
-                press_key(DOOM_KEY_TAB); break;
-            case '+': case '=':             // Zoom in layar
-                press_key(DOOM_KEY_EQUALS); break;
-            case '-': case '_':             // Zoom out layar
-                press_key(DOOM_KEY_MINUS); break;
-
-            default: break;
+        if (down && !doom_key_held[i]) {
+            doom_key_down(keymap[i].doom_key);
+            doom_key_held[i] = 1;
+        } else if (!down && doom_key_held[i]) {
+            doom_key_up(keymap[i].doom_key);
+            doom_key_held[i] = 0;
         }
     }
 }
@@ -367,10 +367,32 @@ int main(void) {
     mode_13h_active = true;  // Matikan doom_sys_print mulai sekarang!
     sync_palette();
 
+    // Batasi kecepatan game ke 35 tic/detik berdasarkan waktu nyata (PIT 1000 Hz via syscall 22).
+    // Sebelumnya loop berjalan secepat CPU emulator sehingga game 2-3x lebih cepat.
+    uint32_t start_ms = sys_ms();
+
+    // Pengaman: kalau kernel belum punya syscall 22 (jam tidak pernah maju), jangan macet
+    // di layar hitam. Cek apakah jam bergerak; jika tidak, game jalan tanpa pembatas kecepatan.
+    bool clock_works = false;
+    for (int probe = 0; probe < 200000 && !clock_works; probe++) {
+        if (sys_ms() != start_ms) clock_works = true;
+    }
+
     while (true) {
+        uint32_t target_tic = clock_works ? (((sys_ms() - start_ms) * 35) / 1000) : (tic_counter + 1);
+        if (tic_counter >= target_tic) {
+            // Belum waktunya frame berikutnya. Tunggu di user mode (tanpa syscall)
+            // supaya tidak membanjiri kernel dengan syscall.
+            for (volatile int w = 0; w < 3000; w++) { }
+            continue;
+        }
+        // Kalau tertinggal terlalu jauh (emulator lambat), jangan catch-up berlebihan
+        if (target_tic - tic_counter > 3) {
+            tic_counter = target_tic - 1;
+        }
+
         handle_input();
 
-        // Majukan tepat 1 tic per frame render (35 FPS mulus tanpa lag!)
         tic_counter++;
 
         // Jalankan 1 frame logika + render DOOM

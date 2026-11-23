@@ -63,4 +63,7 @@ void get_keyboard_buffer(char *buf);
  */
 void keyboard_isr(void);
 
+// Salin status tombol fisik (tekan/lepas) ke buffer 256 byte. index = (extended ? 128 : 0) + scancode
+void keyboard_get_key_state(uint8_t *out);
+
 #endif

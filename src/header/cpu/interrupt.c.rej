@@ -1,0 +1,49 @@
+diff a/src/header/cpu/interrupt.c b/src/header/cpu/interrupt.c	(rejected hunks)
+@@ -71,6 +71,9 @@
+     out(PIC1_DATA, in(PIC1_DATA) & ~(1 << IRQ_TIMER));
+ }
+ 
++// Penghitung waktu sejak boot dalam milidetik (PIT 1000 Hz)
++static volatile uint32_t system_ticks_ms = 0;
++
+ static void syscall(struct InterruptFrame frame) {
+     switch (frame.cpu.general.eax) {
+         case 0:
+@@ -267,6 +270,18 @@
+             }
+             break;
+         }
++        case 22:
++            // Syscall 22: milidetik sejak boot. EBX = uint32_t* hasil
++            if (frame.cpu.general.ebx != 0) {
++                *((uint32_t*) frame.cpu.general.ebx) = system_ticks_ms;
++            }
++            break;
++        case 23:
++            // Syscall 23: status tombol fisik. EBX = uint8_t[256] hasil
++            if (frame.cpu.general.ebx != 0) {
++                keyboard_get_key_state((uint8_t*) frame.cpu.general.ebx);
++            }
++            break;
+         case 21: {
+             // Syscall 21: Antarmuka VGA Mode 13h (320x200, 256 Warna)
+             // EBX = Perintah (0: Set Mode 13h, 1: Set Palet 256, 2: Blit Frame 256, 3: Restore Mode 12h)
+@@ -289,6 +304,7 @@
+ void main_interrupt_handler(struct InterruptFrame frame) {
+     switch (frame.int_number) {
+         case PIC1_OFFSET + IRQ_TIMER: {
++            system_ticks_ms++;
+             pic_ack(IRQ_TIMER);
+             struct Context current_ctx = {
+                 .cpu                         = frame.cpu,
+@@ -308,6 +324,10 @@
+             page_fault_handler();
+             break;
+         case 0x30:
++            // ISR stub memulihkan EFLAGS user (IF=1) lewat popf, jadi timer bisa menyela di tengah syscall.
++            // Context switch selalu membuat iret frame ring 3, sehingga preempt di mode kernel merusak
++            // context. Matikan interrupt selama syscall; iret nanti mengembalikan IF user.
++            __asm__ volatile("cli");
+             syscall(frame);
+             break;
+         default:
