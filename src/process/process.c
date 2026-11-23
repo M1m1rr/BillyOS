@@ -2,6 +2,7 @@
 #include "header/memory/paging.h"
 #include "header/stdlib/string.h"
 #include "header/cpu/gdt.h"
+#include "header/memory/heap.h"
 
 struct ProcessControlBlock _process_list[PROCESS_COUNT_MAX] = {0};
 
@@ -41,6 +42,24 @@ struct ProcessControlBlock* process_get_current_running_pcb_pointer(void) {
     return NULL;
 }
 
+bool process_track_and_allocate_page(struct ProcessControlBlock *pcb, void *vaddr) {
+    if (pcb == NULL) return false;
+    struct PageDirectory *pd = pcb->context.page_directory_virtual_addr;
+    if (!paging_allocate_user_page_frame(pd, vaddr)) {
+        return false;
+    }
+    // Alokasikan node penaut dari kernel heap
+    struct ProcessPageNode *node = (struct ProcessPageNode*) kmalloc(sizeof(struct ProcessPageNode));
+    if (node != NULL) {
+        node->virtual_address      = vaddr;
+        node->next                 = pcb->memory.page_list_head;
+        pcb->memory.page_list_head = node;
+    }
+    pcb->memory.page_frame_count++;
+    pcb->metadata.memory_kb = pcb->memory.page_frame_count * 4;
+    return true;
+}
+
 int32_t process_create_user_process(struct EXT2DriverRequest request, const char *args) {
     if (process_manager_state.active_process_count >= PROCESS_COUNT_MAX) {
         return PROCESS_CREATE_FAIL_MAX_PROCESS_EXCEEDED;
@@ -51,7 +70,7 @@ int32_t process_create_user_process(struct EXT2DriverRequest request, const char
     }
 
     uint32_t page_frame_count_needed = ceil_div(request.buffer_size + PAGE_FRAME_SIZE, PAGE_FRAME_SIZE);
-    if (!paging_allocate_check(page_frame_count_needed) || page_frame_count_needed > PROCESS_PAGE_FRAME_COUNT_MAX) {
+    if (!paging_allocate_check(page_frame_count_needed)) {
         return PROCESS_CREATE_FAIL_NOT_ENOUGH_MEMORY;
     }
 
@@ -80,16 +99,22 @@ int32_t process_create_user_process(struct EXT2DriverRequest request, const char
 
     struct PageDirectory *new_pd = paging_create_new_page_directory();
     if (!new_pd) return PROCESS_CREATE_FAIL_NOT_ENOUGH_MEMORY;
+    new_pcb->context.page_directory_virtual_addr = new_pd; // <-- TAMBAHKAN BARIS INI (Baris 102)
     
     struct PageDirectory *prev_pd = paging_get_current_page_directory_addr();
     paging_use_page_directory(new_pd);
 
     uint32_t code_pages = ceil_div(request.buffer_size, PAGE_FRAME_SIZE);
     for (uint32_t i = 0; i < code_pages; i++) {
-        paging_allocate_user_page_frame(new_pd, (void*) ((uint32_t) request.buf + i * PAGE_FRAME_SIZE));
+        void *vaddr = (void*) ((uint32_t) request.buf + i * PAGE_FRAME_SIZE);
+        process_track_and_allocate_page(new_pcb, vaddr);
     }
 
-    paging_allocate_user_page_frame(new_pd, (void*) (0x400000 - PAGE_FRAME_SIZE));
+    // Zero-out seluruh area program (membersihkan data sampah pada section .bss)
+    memset(request.buf, 0, request.buffer_size);
+
+    // Alokasikan dan tautkan stack user (0x400000 - PAGE_FRAME_SIZE)
+    process_track_and_allocate_page(new_pcb, (void*) (0x400000 - PAGE_FRAME_SIZE));
 
     int8_t fs_ret = read(request);
 
@@ -167,8 +192,20 @@ int32_t process_create_user_process(struct EXT2DriverRequest request, const char
 bool process_destroy(uint32_t pid) {
     for (uint32_t i = 0; i < PROCESS_COUNT_MAX; i++) {
         if (_process_list[i].metadata.pid == pid && _process_list[i].metadata.state != PROCESS_STATE_INACTIVE) {
-            paging_free_page_directory(_process_list[i].context.page_directory_virtual_addr);
-            memset(&_process_list[i], 0, sizeof(struct ProcessControlBlock));
+            struct ProcessControlBlock *pcb = &_process_list[i];
+            struct PageDirectory *pd = pcb->context.page_directory_virtual_addr;
+
+            // Bebaskan seluruh halaman dinamis yang terhubung di linked-list
+            struct ProcessPageNode *curr = pcb->memory.page_list_head;
+            while (curr != NULL) {
+                struct ProcessPageNode *next = curr->next;
+                paging_free_user_page_frame(pd, curr->virtual_address);
+                kfree(curr); // Bebaskan node pelacak ke heap
+                curr = next;
+            }
+
+            paging_free_page_directory(pd);
+            memset(pcb, 0, sizeof(struct ProcessControlBlock));
             process_manager_state.active_process_count--;
             return true;
         }

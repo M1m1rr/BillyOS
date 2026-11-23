@@ -26,7 +26,9 @@ const char keyboard_scancode_1_to_ascii_map[256] = {
 static struct KeyboardDriverState keyboard_state = {
     .read_extended_mode = false,
     .keyboard_input_on  = false,
-    .keyboard_buffer    = 0,
+    .buffer             = {0},
+    .buf_head           = 0,
+    .buf_tail           = 0,
 };
 
 void keyboard_state_activate(void) {
@@ -38,8 +40,21 @@ void keyboard_state_deactivate(void) {
 }
 
 void get_keyboard_buffer(char *buf) {
-    *buf = keyboard_state.keyboard_buffer;
-    keyboard_state.keyboard_buffer = 0;
+    if (keyboard_state.buf_tail != keyboard_state.buf_head) {
+        *buf = keyboard_state.buffer[keyboard_state.buf_tail];
+        keyboard_state.buf_tail = (keyboard_state.buf_tail + 1) % KEYBOARD_BUFFER_SIZE;
+    } else {
+        *buf = 0;
+    }
+}
+
+// Tambahkan karakter ke ring buffer (dipanggil dari ISR)
+static void keyboard_buffer_push(char c) {
+    uint8_t next = (keyboard_state.buf_head + 1) % KEYBOARD_BUFFER_SIZE;
+    if (next != keyboard_state.buf_tail) {  // Buffer belum penuh
+        keyboard_state.buffer[keyboard_state.buf_head] = c;
+        keyboard_state.buf_head = next;
+    }
 }
 
 static bool shift_active = false;
@@ -54,8 +69,10 @@ void keyboard_isr(void) {
     }
 
     // 1. Deteksi tombol Shift (Left Shift: 0x2A, Right Shift: 0x36)
+        // 1. Deteksi tombol Shift (Left Shift: 0x2A, Right Shift: 0x36)
     if (scancode == 0x2A || scancode == 0x36) {
         shift_active = true;
+        keyboard_buffer_push((char) 0x9E);  // Kirim event Shift ke buffer untuk DOOM (lari)
         pic_ack(IRQ_KEYBOARD);
         return;
     }
@@ -68,32 +85,43 @@ void keyboard_isr(void) {
 
     if (keyboard_state.keyboard_input_on) {
         if (!(scancode & 0x80)) {
-            if (!keyboard_state.read_extended_mode) {
-                char c = keyboard_scancode_1_to_ascii_map[scancode];
-                if (c) {
-                    // 2. Jika Shift aktif, ubah karakter ke simbol / huruf kapital
-                    if (shift_active) {
-                        if (c >= 'a' && c <= 'z') c -= 32;       // Huruf kapital A-Z
-                        else if (c == '\\') c = '|';             // Backslash menjadi Pipe '|'!
-                        else if (c == '1')  c = '!';
-                        else if (c == '2')  c = '@';
-                        else if (c == '3')  c = '#';
-                        else if (c == '4')  c = '$';
-                        else if (c == '5')  c = '%';
-                        else if (c == '6')  c = '^';
-                        else if (c == '7')  c = '&';
-                        else if (c == '8')  c = '*';
-                        else if (c == '9')  c = '(';
-                        else if (c == '0')  c = ')';
-                        else if (c == '-')  c = '_';             // Underscore '_'
-                        else if (c == '=')  c = '+';
-                        else if (c == ';')  c = ':';
-                        else if (c == '\'') c = '"';
-                        else if (c == ',')  c = '<';
-                        else if (c == '.')  c = '>';
-                        else if (c == '/')  c = '?';
+            if (keyboard_state.read_extended_mode) {
+                // Extended Arrow Keys untuk DOOM & Navigation
+                if (scancode == 0x48) keyboard_buffer_push((char) 0xAD); // Up Arrow
+                else if (scancode == 0x50) keyboard_buffer_push((char) 0xAF); // Down Arrow
+                else if (scancode == 0x4B) keyboard_buffer_push((char) 0xAC); // Left Arrow
+                else if (scancode == 0x4D) keyboard_buffer_push((char) 0xAE); // Right Arrow
+            } else {
+                if (scancode == 0x1D) {
+                    // Left Ctrl (Fire Weapon)
+                    keyboard_buffer_push((char) 0x9D);
+                } else {
+                    char c = keyboard_scancode_1_to_ascii_map[scancode];
+                    if (c) {
+                        // Jika Shift aktif, ubah karakter ke simbol / huruf kapital
+                        if (shift_active) {
+                            if (c >= 'a' && c <= 'z') c -= 32;       // Huruf kapital A-Z
+                            else if (c == '\\') c = '|';             // Backslash menjadi Pipe '|'!
+                            else if (c == '1')  c = '!';
+                            else if (c == '2')  c = '@';
+                            else if (c == '3')  c = '#';
+                            else if (c == '4')  c = '$';
+                            else if (c == '5')  c = '%';
+                            else if (c == '6')  c = '^';
+                            else if (c == '7')  c = '&';
+                            else if (c == '8')  c = '*';
+                            else if (c == '9')  c = '(';
+                            else if (c == '0')  c = ')';
+                            else if (c == '-')  c = '_';             // Underscore '_'
+                            else if (c == '=')  c = '+';
+                            else if (c == ';')  c = ':';
+                            else if (c == '\'') c = '"';
+                            else if (c == ',')  c = '<';
+                            else if (c == '.')  c = '>';
+                            else if (c == '/')  c = '?';
+                        }
+                        keyboard_buffer_push(c);
                     }
-                    keyboard_state.keyboard_buffer = c;
                 }
             }
         }

@@ -312,26 +312,53 @@ int8_t read(struct EXT2DriverRequest request) {
         return 2; // Buffer tidak cukup
     }
 
-    // 5. Baca semua blok data file (Direct Blocks 0..11 + Singly Indirect Block 12)
+    // 5. Baca semua blok data file (Direct 0..11 + Singly Indirect 12 + Doubly Indirect 13)
     uint32_t bytes_to_read = target_node.i_size;
     uint32_t bytes_read = 0;
     struct BlockBuffer b;
-    uint32_t indirect_table[BLOCK_SIZE / 4];
-    bool indirect_loaded = false;
     uint32_t blocks_needed = (bytes_to_read + BLOCK_SIZE - 1) / BLOCK_SIZE;
+
+    // Cache untuk Singly Indirect (i_block[12])
+    uint32_t single_table[BLOCK_SIZE / 4];
+    bool     single_loaded = false;
+
+    // Cache untuk Doubly Indirect (i_block[13])
+    uint32_t d1_table[BLOCK_SIZE / 4];
+    bool     d1_loaded = false;
+    uint32_t d2_table[BLOCK_SIZE / 4];
+    int32_t  cur_d1_idx = -1;
 
     for (uint32_t i = 0; i < blocks_needed; i++) {
         uint32_t blk = 0;
         if (i < 12) {
             blk = target_node.i_block[i];
-        } else {
-            if (!indirect_loaded) {
+        } else if (i < 140) {
+            if (!single_loaded) {
                 if (target_node.i_block[12] == 0) break;
-                read_blocks(indirect_table, target_node.i_block[12], 1);
-                indirect_loaded = true;
+                read_blocks(single_table, target_node.i_block[12], 1);
+                single_loaded = true;
             }
-            blk = indirect_table[i - 12];
+            blk = single_table[i - 12];
+        } else if (i < 16524) {
+            if (!d1_loaded) {
+                if (target_node.i_block[13] == 0) break;
+                read_blocks(d1_table, target_node.i_block[13], 1);
+                d1_loaded = true;
+            }
+            uint32_t d_idx = i - 140;
+            uint32_t d1 = d_idx / 128;
+            uint32_t d2 = d_idx % 128;
+
+            if ((int32_t) d1 != cur_d1_idx) {
+                if (d1_table[d1] == 0) break;
+                read_blocks(d2_table, d1_table[d1], 1);
+                cur_d1_idx = (int32_t) d1;
+            }
+            blk = d2_table[d2];
+        } else {
+            break; // Melebihi kapasitas maksimal 8.4 MB
         }
+
         if (blk == 0) break;
 
         read_blocks(&b, blk, 1);
@@ -499,9 +526,9 @@ int8_t write(struct EXT2DriverRequest *request) {
         // Tambahkan ke parent directory
         add_directory_entry(&parent_node, new_inode_num, request->name, request->name_len, EXT2_FT_DIR);
     } else {
-                // --- MEMBUAT FILE (Mendukung Direct + Singly Indirect Block hingga 70 KB) ---
+        // --- MEMBUAT FILE (Mendukung Direct + Singly + Doubly Indirect Block hingga 8.4 MB) ---
         uint32_t blocks_needed = (request->buffer_size + BLOCK_SIZE - 1) / BLOCK_SIZE;
-        if (blocks_needed > 12 + (BLOCK_SIZE / 4)) return -1; // Maks 140 blok
+        if (blocks_needed > 16524) return -1; // Maksimal 8.4 MB
 
         new_node.i_mode   = EXT2_S_IFREG | EXT2_FT_REG_FILE;
         new_node.i_size   = request->buffer_size;
@@ -509,15 +536,20 @@ int8_t write(struct EXT2DriverRequest *request) {
 
         uint32_t bytes_written = 0;
         struct BlockBuffer b;
-        uint32_t indirect_table[BLOCK_SIZE / 4];
-        uint32_t indirect_lba = 0;
 
-        if (blocks_needed > 12) {
-            indirect_lba = allocate_single_block();
-            if (indirect_lba == 0) return -1;
-            new_node.i_block[12] = indirect_lba;
-            memset(indirect_table, 0, BLOCK_SIZE);
-        }
+        // Cache Singly Indirect
+        uint32_t single_table[BLOCK_SIZE / 4];
+        uint32_t single_lba = 0;
+        bool     single_dirty = false;
+
+        // Cache Doubly Indirect
+        uint32_t d1_table[BLOCK_SIZE / 4];
+        uint32_t d1_lba = 0;
+        bool     d1_dirty = false;
+        uint32_t d2_table[BLOCK_SIZE / 4];
+        uint32_t cur_d2_lba = 0;
+        int32_t  cur_d1_idx = -1;
+        bool     d2_dirty = false;
 
         for (uint32_t i = 0; i < blocks_needed; i++) {
             uint32_t block_lba = allocate_single_block();
@@ -525,8 +557,41 @@ int8_t write(struct EXT2DriverRequest *request) {
 
             if (i < 12) {
                 new_node.i_block[i] = block_lba;
-            } else {
-                indirect_table[i - 12] = block_lba;
+            } else if (i < 140) {
+                if (single_lba == 0) {
+                    single_lba = allocate_single_block();
+                    if (single_lba == 0) return -1;
+                    new_node.i_block[12] = single_lba;
+                    memset(single_table, 0, BLOCK_SIZE);
+                }
+                single_table[i - 12] = block_lba;
+                single_dirty = true;
+            } else if (i < 16524) {
+                if (d1_lba == 0) {
+                    d1_lba = allocate_single_block();
+                    if (d1_lba == 0) return -1;
+                    new_node.i_block[13] = d1_lba;
+                    memset(d1_table, 0, BLOCK_SIZE);
+                    d1_dirty = true;
+                }
+                uint32_t d_idx = i - 140;
+                uint32_t d1 = d_idx / 128;
+                uint32_t d2 = d_idx % 128;
+
+                if ((int32_t) d1 != cur_d1_idx) {
+                    if (d2_dirty && cur_d2_lba != 0) {
+                        write_blocks(d2_table, cur_d2_lba, 1);
+                        d2_dirty = false;
+                    }
+                    cur_d2_lba = allocate_single_block();
+                    if (cur_d2_lba == 0) return -1;
+                    d1_table[d1] = cur_d2_lba;
+                    cur_d1_idx = (int32_t) d1;
+                    memset(d2_table, 0, BLOCK_SIZE);
+                    d1_dirty = true;
+                }
+                d2_table[d2] = block_lba;
+                d2_dirty = true;
             }
 
             memset(&b, 0, BLOCK_SIZE);
@@ -536,8 +601,15 @@ int8_t write(struct EXT2DriverRequest *request) {
             bytes_written += chunk;
         }
 
-        if (indirect_lba != 0) {
-            write_blocks(indirect_table, indirect_lba, 1);
+        // Tulis semua tabel pointer ke disk
+        if (single_dirty && single_lba != 0) {
+            write_blocks(single_table, single_lba, 1);
+        }
+        if (d2_dirty && cur_d2_lba != 0) {
+            write_blocks(d2_table, cur_d2_lba, 1);
+        }
+        if (d1_dirty && d1_lba != 0) {
+            write_blocks(d1_table, d1_lba, 1);
         }
 
         sync_node(&new_node, new_inode_num);
@@ -636,7 +708,7 @@ int8_t delete(struct EXT2DriverRequest request) {
     }
     write_blocks(&b, parent_node.i_block[0], 1);
 
-    // 5. Deallokasi Blok Data milik target
+    // 5. Deallokasi Blok Data milik target (Direct + Singly + Doubly)
     for (uint32_t i = 0; i < 12 && i < target_node.i_blocks; i++) {
         uint32_t blk = target_node.i_block[i];
         if (blk == 0) continue;
@@ -649,6 +721,72 @@ int8_t delete(struct EXT2DriverRequest request) {
         bm.buf[bit_pos / 8] &= ~(1 << (bit_pos % 8));
         write_blocks(&bm, fs_bgd_table.table[grp].bg_block_bitmap, 1);
 
+        fs_bgd_table.table[grp].bg_free_blocks_count++;
+        fs_superblock.s_free_blocks_count++;
+    }
+
+    // Bebaskan Singly Indirect Block jika ada
+    if (target_node.i_block[12] != 0) {
+        uint32_t s_tbl[128];
+        read_blocks(s_tbl, target_node.i_block[12], 1);
+        for (int k = 0; k < 128; k++) {
+            if (s_tbl[k] != 0) {
+                uint32_t grp = s_tbl[k] / BLOCKS_PER_GROUP;
+                uint32_t bit = s_tbl[k] % BLOCKS_PER_GROUP;
+                struct BlockBuffer bm;
+                read_blocks(&bm, fs_bgd_table.table[grp].bg_block_bitmap, 1);
+                bm.buf[bit / 8] &= ~(1 << (bit % 8));
+                write_blocks(&bm, fs_bgd_table.table[grp].bg_block_bitmap, 1);
+                fs_bgd_table.table[grp].bg_free_blocks_count++;
+                fs_superblock.s_free_blocks_count++;
+            }
+        }
+        uint32_t grp = target_node.i_block[12] / BLOCKS_PER_GROUP;
+        uint32_t bit = target_node.i_block[12] % BLOCKS_PER_GROUP;
+        struct BlockBuffer bm;
+        read_blocks(&bm, fs_bgd_table.table[grp].bg_block_bitmap, 1);
+        bm.buf[bit / 8] &= ~(1 << (bit % 8));
+        write_blocks(&bm, fs_bgd_table.table[grp].bg_block_bitmap, 1);
+        fs_bgd_table.table[grp].bg_free_blocks_count++;
+        fs_superblock.s_free_blocks_count++;
+    }
+
+    // Bebaskan Doubly Indirect Block jika ada
+    if (target_node.i_block[13] != 0) {
+        uint32_t d1_tbl[128];
+        read_blocks(d1_tbl, target_node.i_block[13], 1);
+        for (int k = 0; k < 128; k++) {
+            if (d1_tbl[k] != 0) {
+                uint32_t d2_tbl[128];
+                read_blocks(d2_tbl, d1_tbl[k], 1);
+                for (int m = 0; m < 128; m++) {
+                    if (d2_tbl[m] != 0) {
+                        uint32_t grp = d2_tbl[m] / BLOCKS_PER_GROUP;
+                        uint32_t bit = d2_tbl[m] % BLOCKS_PER_GROUP;
+                        struct BlockBuffer bm;
+                        read_blocks(&bm, fs_bgd_table.table[grp].bg_block_bitmap, 1);
+                        bm.buf[bit / 8] &= ~(1 << (bit % 8));
+                        write_blocks(&bm, fs_bgd_table.table[grp].bg_block_bitmap, 1);
+                        fs_bgd_table.table[grp].bg_free_blocks_count++;
+                        fs_superblock.s_free_blocks_count++;
+                    }
+                }
+                uint32_t grp = d1_tbl[k] / BLOCKS_PER_GROUP;
+                uint32_t bit = d1_tbl[k] % BLOCKS_PER_GROUP;
+                struct BlockBuffer bm;
+                read_blocks(&bm, fs_bgd_table.table[grp].bg_block_bitmap, 1);
+                bm.buf[bit / 8] &= ~(1 << (bit % 8));
+                write_blocks(&bm, fs_bgd_table.table[grp].bg_block_bitmap, 1);
+                fs_bgd_table.table[grp].bg_free_blocks_count++;
+                fs_superblock.s_free_blocks_count++;
+            }
+        }
+        uint32_t grp = target_node.i_block[13] / BLOCKS_PER_GROUP;
+        uint32_t bit = target_node.i_block[13] % BLOCKS_PER_GROUP;
+        struct BlockBuffer bm;
+        read_blocks(&bm, fs_bgd_table.table[grp].bg_block_bitmap, 1);
+        bm.buf[bit / 8] &= ~(1 << (bit % 8));
+        write_blocks(&bm, fs_bgd_table.table[grp].bg_block_bitmap, 1);
         fs_bgd_table.table[grp].bg_free_blocks_count++;
         fs_superblock.s_free_blocks_count++;
     }

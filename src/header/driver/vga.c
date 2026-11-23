@@ -5,6 +5,7 @@
 #define VGA_VRAM ((volatile uint8_t*) 0xC00A0000)
 
 static bool in_graphics_mode = false;
+static bool in_mode_13h      = false;
 static int cur_cursor_row = 0;
 static int cur_cursor_col = 0;
 static char    text_screen[VGA_TEXT_ROWS][VGA_TEXT_COLS];
@@ -33,7 +34,26 @@ static const uint8_t vga_mode12_ac[] = {
     0x01, 0x00, 0x0F, 0x00, 0x00
 };
 
-// ==================== 2. TABEL FONT BITMAP 8x8 (ASCII 32..126) ====================
+// ==================== TABEL REGISTER VGA MODE 13h (320x200 256 COLORS) ====================
+static const uint8_t vga_mode13_seq[] = {
+    0x03, 0x01, 0x0F, 0x00, 0x0E
+};
+
+static const uint8_t vga_mode13_crtc[] = {
+    0x5F, 0x4F, 0x50, 0x82, 0x54, 0x80, 0xBF, 0x1F,
+    0x00, 0x41, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x9C, 0x0E, 0x8F, 0x28, 0x40, 0x96, 0xB9, 0xA3, 0xFF
+};
+
+static const uint8_t vga_mode13_gc[] = {
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x05, 0x0F, 0xFF
+};
+
+static const uint8_t vga_mode13_ac[] = {
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+    0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+    0x41, 0x00, 0x0F, 0x00, 0x00
+};
 
 // ==================== 2. TABEL FONT BITMAP 8x16 (IBM VGA / Classic Windows Terminal) ====================
 
@@ -197,6 +217,7 @@ void vga_init_graphics_mode(void) {
     out(0x3C0, 0x20);
 
     in_graphics_mode = true;
+    in_mode_13h = false;
     vga_clear_screen(VGA_COLOR_BLACK);
 }
 
@@ -289,6 +310,10 @@ void vga_draw_circle(int xc, int yc, int r, uint8_t color) {
 // ==================== 5. TEXT CONSOLE & KURSOR ====================
 
 void vga_clear_screen(uint8_t color) {
+    if (in_mode_13h) return;
+    cur_cursor_row = -1;
+    cur_cursor_col = -1;
+
     out(0x3CE, 0x08);
     out(0x3CF, 0xFF);
 
@@ -304,6 +329,7 @@ void vga_clear_screen(uint8_t color) {
 }
 
 void vga_draw_char(int col, int row, char c, uint8_t fg, uint8_t bg) {
+    if (in_mode_13h) return; // Lindungi Mode 13h
     if (col < 0 || col >= VGA_TEXT_COLS || row < 0 || row >= VGA_TEXT_ROWS) return;
 
     text_screen[row][col] = c;
@@ -331,10 +357,10 @@ void vga_draw_char(int col, int row, char c, uint8_t fg, uint8_t bg) {
     }
 }
 
-void vga_set_cursor(int row, int col) {
-    if (!in_graphics_mode) return;
+// Fungsi helper untuk menghapus kursor dari VRAM sebelum scroll atau pindah posisi
+static void vga_erase_cursor(void) {
+    if (in_mode_13h) return;
 
-    // 1. Kembalikan/gambar ulang karakter asli di posisi kursor lama (tidak ditimpa hitam buta!)
     if (cur_cursor_col >= 0 && cur_cursor_col < VGA_TEXT_COLS &&
         cur_cursor_row >= 0 && cur_cursor_row < VGA_TEXT_ROWS) {
         char old_c = text_screen[cur_cursor_row][cur_cursor_col];
@@ -358,13 +384,23 @@ void vga_set_cursor(int row, int col) {
             *vram = old_fg;
         }
     }
+    cur_cursor_row = -1;
+    cur_cursor_col = -1;
+}
+
+void vga_set_cursor(int row, int col) {
+    if (in_mode_13h) return; // Lindungi Mode 13h
+    if (!in_graphics_mode) return;
+
+    // 1. Hapus kursor lama
+    vga_erase_cursor();
 
     cur_cursor_row = row;
     cur_cursor_col = col;
 
-    // 2. Gambar kursor underline putih di posisi baru (scanline 14-15)
+    // 2. Gambar kursor underline putih di posisi baru (hanya di area console aktif)
     if (cur_cursor_col >= 0 && cur_cursor_col < VGA_TEXT_COLS &&
-        cur_cursor_row >= 0 && cur_cursor_row < VGA_TEXT_ROWS) {
+        cur_cursor_row >= 0 && cur_cursor_row < 29) {
         for (int l = 14; l < 16; l++) {
             uint16_t offset = (cur_cursor_row * 16 + l) * (VGA_WIDTH / 8) + cur_cursor_col;
             out(0x3CE, 0x08);
@@ -376,11 +412,16 @@ void vga_set_cursor(int row, int col) {
 }
 
 void vga_scroll(void) {
+    if (in_mode_13h) return;
+    // 1. HAPUS kursor underline terlebih dahulu agar tidak ikut tersalin ke baris atasnya!
+    vga_erase_cursor();
+
     out(0x3CE, 0x05);
     out(0x3CF, 0x01); // Write Mode 1 (latch copy 4 plane sekaligus)
 
-    uint32_t line_bytes = VGA_WIDTH / 8;
-    for (uint32_t i = 0; i < (VGA_HEIGHT - 16) * line_bytes; i++) {
+    uint32_t line_bytes = VGA_WIDTH / 8; // 80 byte per baris
+    // 2. Hanya scroll baris 0 s.d. 28 (baris 29 khusus untuk clock tetap diam di pojok bawah!)
+    for (uint32_t i = 0; i < (28 * 16) * line_bytes; i++) {
         uint8_t dummy = VGA_VRAM[i + 16 * line_bytes];
         VGA_VRAM[i] = dummy;
     }
@@ -388,18 +429,203 @@ void vga_scroll(void) {
     out(0x3CE, 0x05);
     out(0x3CF, 0x02); // Kembalikan ke Write Mode 2
 
+    // 3. Bersihkan baris 28 (scanline 448 s.d. 463) dengan warna hitam
     out(0x3CE, 0x08);
     out(0x3CF, 0xFF);
-    for (uint32_t i = (VGA_HEIGHT - 16) * line_bytes; i < VGA_HEIGHT * line_bytes; i++) {
+    for (uint32_t i = (28 * 16) * line_bytes; i < (29 * 16) * line_bytes; i++) {
         volatile uint8_t dummy = VGA_VRAM[i];
         (void) dummy;
         VGA_VRAM[i] = VGA_COLOR_BLACK;
     }
 
-    memmove(text_screen[0], text_screen[1], (VGA_TEXT_ROWS - 1) * VGA_TEXT_COLS);
-    memmove(text_fg_buf[0], text_fg_buf[1], (VGA_TEXT_ROWS - 1) * VGA_TEXT_COLS);
-    memmove(text_bg_buf[0], text_bg_buf[1], (VGA_TEXT_ROWS - 1) * VGA_TEXT_COLS);
-    memset(text_screen[VGA_TEXT_ROWS - 1], ' ', VGA_TEXT_COLS);
-    memset(text_fg_buf[VGA_TEXT_ROWS - 1], 0x07, VGA_TEXT_COLS);
-    memset(text_bg_buf[VGA_TEXT_ROWS - 1], 0x00, VGA_TEXT_COLS);
+    // 4. Geser buffer teks hanya untuk baris 0 s.d. 28
+    memmove(text_screen[0], text_screen[1], 28 * VGA_TEXT_COLS);
+    memmove(text_fg_buf[0], text_fg_buf[1], 28 * VGA_TEXT_COLS);
+    memmove(text_bg_buf[0], text_bg_buf[1], 28 * VGA_TEXT_COLS);
+    memset(text_screen[28], ' ', VGA_TEXT_COLS);
+    memset(text_fg_buf[28], 0x07, VGA_TEXT_COLS);
+    memset(text_bg_buf[28], 0x00, VGA_TEXT_COLS);
+}
+
+// ==================== CUSTOM DOOM 16-COLOR DAC PALETTE ====================
+// Memprogram ulang register DAC VGA (Port 0x3C8/0x3C9) dengan 16 warna yang dioptimalkan
+// khusus untuk DOOM (3 gradasi cokelat, 5 gradasi abu-abu, kulit, merah, kuning, hijau, biru).
+void vga_set_doom_palette(void) {
+    static const uint8_t dac_indices[16] = {
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x14, 0x07,
+        0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F
+    };
+    // Format nilai DAC VGA adalah 6-bit per kanal (0..63)
+    static const uint8_t doom_dac[16][3] = {
+        {  0,  0,  0 }, // 0: Pure Black
+        {  5,  8, 22 }, // 1: Dark Blue (air/potion)
+        {  8, 15,  5 }, // 2: Dark Green (slime beracun)
+        { 14,  9,  4 }, // 3: Dark Brown (dinding batu/kayu redup)
+        { 30,  5,  5 }, // 4: Dark Red (darah)
+        { 24, 15,  8 }, // 5: Medium Brown (dinding bata/kayu normal)
+        { 36, 24, 12 }, // 6: Light Brown (sarung tangan)
+        { 40, 40, 40 }, // 7: Light Gray (bingkai status bar/batu terang)
+        { 12, 12, 12 }, // 8: Dark Gray (bayangan logam)
+        { 25, 25, 25 }, // 9: Medium Gray (senjata shotgun/pistol)
+        { 15, 38, 10 }, // 10: Bright Green (armor)
+        { 50, 35, 25 }, // 11: Flesh (kulit/wajah Doomguy)
+        { 55,  7,  7 }, // 12: Bright Red (angka health & damage flash)
+        { 15, 25, 58 }, // 13: Bright Blue (plasma & keycard biru)
+        { 58, 48, 10 }, // 14: Yellow / Gold (angka ammo)
+        { 63, 63, 63 }  // 15: Bright White (cahaya/lampu)
+    };
+
+    for (int i = 0; i < 16; i++) {
+        out(0x3C8, dac_indices[i]);
+        out(0x3C9, doom_dac[i][0]);
+        out(0x3C9, doom_dac[i][1]);
+        out(0x3C9, doom_dac[i][2]);
+    }
+}
+
+// ==================== FAST DOOM PLANAR BLITTER ====================
+void vga_blit_doom(const uint8_t *frame_320x200) {
+    if (!frame_320x200) return;
+
+    vga_erase_cursor();
+
+    // Otomatis aktifkan palette custom DOOM pada frame pertama
+    static bool doom_palette_ready = false;
+    if (!doom_palette_ready) {
+        vga_set_doom_palette();
+        doom_palette_ready = true;
+    }
+
+    // Lookup table untuk 2x horizontal scaling: 1 pixel color (4-bit) -> 2 pixel screen (2-bit mask)
+    static const uint8_t pair_mask[4][16] = {
+        // Plane 0 (bit 0)
+        { 0x0, 0x3, 0x0, 0x3, 0x0, 0x3, 0x0, 0x3, 0x0, 0x3, 0x0, 0x3, 0x0, 0x3, 0x0, 0x3 },
+        // Plane 1 (bit 1)
+        { 0x0, 0x0, 0x3, 0x3, 0x0, 0x0, 0x3, 0x3, 0x0, 0x0, 0x3, 0x3, 0x0, 0x0, 0x3, 0x3 },
+        // Plane 2 (bit 2)
+        { 0x0, 0x0, 0x0, 0x0, 0x3, 0x3, 0x3, 0x3, 0x0, 0x0, 0x0, 0x0, 0x3, 0x3, 0x3, 0x3 },
+        // Plane 3 (bit 3)
+        { 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x3, 0x3, 0x3, 0x3, 0x3, 0x3, 0x3, 0x3 }
+    };
+
+    // Mode 12h: Set Write Mode 0 dan Bit Mask 0xFF
+    out(0x3CE, 0x05);
+    out(0x3CF, 0x00);
+    out(0x3CE, 0x01);
+    out(0x3CF, 0x00);
+    out(0x3CE, 0x08);
+    out(0x3CF, 0xFF);
+
+    for (uint8_t plane = 0; plane < 4; plane++) {
+        out(0x3C4, 0x02);
+        out(0x3C5, 1 << plane);
+
+        const uint8_t *mask_lut = pair_mask[plane];
+
+        for (int r = 0; r < 200; r++) {
+            const uint8_t *src_row = &frame_320x200[r * 320];
+            uint32_t line_offset1 = (40 + 2 * r) * (VGA_WIDTH / 8);
+            uint32_t line_offset2 = line_offset1 + (VGA_WIDTH / 8);
+
+            for (int col = 0; col < 80; col++) {
+                uint8_t c0 = src_row[col * 4 + 0] & 0x0F;
+                uint8_t c1 = src_row[col * 4 + 1] & 0x0F;
+                uint8_t c2 = src_row[col * 4 + 2] & 0x0F;
+                uint8_t c3 = src_row[col * 4 + 3] & 0x0F;
+
+                uint8_t val = (mask_lut[c0] << 6) |
+                              (mask_lut[c1] << 4) |
+                              (mask_lut[c2] << 2) |
+                              (mask_lut[c3]);
+
+                VGA_VRAM[line_offset1 + col] = val;
+                VGA_VRAM[line_offset2 + col] = val;
+            }
+        }
+    }
+
+    // Kembalikan konfigurasi register VGA ke standar BillyOS (Write Mode 2, Map Mask 0x0F)
+    out(0x3C4, 0x02);
+    out(0x3C5, 0x0F);
+    out(0x3CE, 0x05);
+    out(0x3CF, 0x02);
+    out(0x3CE, 0x08);
+    out(0x3CF, 0xFF);
+}
+
+// ==================== IMPLEMENTASI MODE 13h ====================
+
+void vga_set_mode_13h(void) {
+    // 1. Miscellaneous Output Register (0x63 untuk dot-clock 25 MHz & 320x200)
+    out(0x3C2, 0x63);
+
+    // 2. Sequencer Registers
+    for (uint8_t i = 0; i < 5; i++) {
+        out(0x3C4, i);
+        out(0x3C5, vga_mode13_seq[i]);
+    }
+
+    // Unlock CRTC registers 0..7
+    out(0x3D4, 0x11);
+    out(0x3D5, in(0x3D5) & 0x7F);
+
+    // 3. CRT Controller Registers
+    for (uint8_t i = 0; i < 25; i++) {
+        out(0x3D4, i);
+        out(0x3D5, vga_mode13_crtc[i]);
+    }
+
+    // 4. Graphics Controller Registers
+    for (uint8_t i = 0; i < 9; i++) {
+        out(0x3CE, i);
+        out(0x3CF, vga_mode13_gc[i]);
+    }
+
+    // 5. Attribute Controller Registers
+    for (uint8_t i = 0; i < 21; i++) {
+        in(0x3DA);
+        out(0x3C0, i);
+        out(0x3C0, vga_mode13_ac[i]);
+    }
+    in(0x3DA);
+    out(0x3C0, 0x20); // Enable video output
+
+    in_graphics_mode = true;
+    in_mode_13h = true;
+    cur_cursor_row = -1;
+    cur_cursor_col = -1;
+
+    // Bersihkan layar VRAM Mode 13h (320x200 = 64.000 byte)
+    for (uint32_t i = 0; i < 320 * 200; i++) {
+        VGA_VRAM[i] = 0;
+    }
+}
+
+// Memuat 256 warna palet RGB DOOM langsung ke hardware DAC VGA (Port 0x3C8/0x3C9)
+void vga_set_palette_256(const uint8_t *pal) {
+    if (!pal) return;
+    out(0x3C8, 0); // Mulai dari warna indeks 0
+    for (int i = 0; i < 256 * 3; i++) {
+        out(0x3C9, pal[i] >> 2); // Konversi nilai RGB 8-bit (0..255) ke DAC VGA 6-bit (0..63)
+    }
+}
+
+// Blit cepat 320x200 byte langsung ke memori video linier Mode 13h
+void vga_blit_256(const uint8_t *frame_320x200) {
+    if (!frame_320x200) return;
+
+    if (!in_mode_13h) {
+        vga_set_mode_13h();
+    }
+
+    // Pastikan register VGA selalu dalam kondisi murni Mode 13h (Chain-4, Write Mode 0, Mask 0xFF)
+    out(0x3CE, 0x05); out(0x3CF, 0x40); // Write Mode 0, Chain-4
+    out(0x3CE, 0x08); out(0x3CF, 0xFF); // Bit Mask 0xFF
+    out(0x3C4, 0x02); out(0x3C5, 0x0F); // Map Mask: semua plane aktif
+
+    uint32_t *dst = (uint32_t*) VGA_VRAM;
+    const uint32_t *src = (const uint32_t*) frame_320x200;
+    for (int i = 0; i < (320 * 200) / 4; i++) {
+        dst[i] = src[i];
+    }
 }

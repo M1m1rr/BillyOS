@@ -16,6 +16,7 @@
 #include "header/stdlib/string.h"
 #include "header/filesystem/bfs.h"
 #include "header/cpu/portio.h"
+#include "header/memory/heap.h"
 
 static void scroll(void) {
     if (vga_is_graphics_mode()) {
@@ -70,7 +71,8 @@ void kernel_setup(void) {
     framebuffer_set_cursor(0, 0);
 
     initialize_filesystem_ext2();
-    bfs_init(); // <-- Tambahkan di sini
+    bfs_init();
+    kheap_init();
 
     int row = 0, col = 0;
     print_text(&row, &col, "=== BillyOS Paging & Swap Test Suite ===\n\n", 0x0E);

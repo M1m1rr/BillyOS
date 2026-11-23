@@ -41,4 +41,12 @@ void vga_draw_char(int col, int row, char c, uint8_t fg, uint8_t bg);
 void vga_set_cursor(int row, int col);
 void vga_scroll(void);
 
+void vga_set_doom_palette(void);
+
+void vga_blit_doom(const uint8_t *frame_320x200);
+
+void vga_set_mode_13h(void);
+void vga_set_palette_256(const uint8_t *pal);
+void vga_blit_256(const uint8_t *frame_320x200);
+
 #endif

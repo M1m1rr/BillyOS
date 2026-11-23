@@ -10,7 +10,7 @@
 #include "header/filesystem/ext2.h"
 
 #define PROCESS_NAME_LENGTH_MAX          32
-#define PROCESS_PAGE_FRAME_COUNT_MAX     8
+#define PROCESS_PAGE_FRAME_COUNT_MAX     PAGE_FRAME_MAX_COUNT
 #define PROCESS_COUNT_MAX                16
 
 #define CPU_EFLAGS_BASE_FLAG             0x2
@@ -40,11 +40,21 @@ struct ProcessMetadata {
     uint32_t      pid;
     char          name[PROCESS_NAME_LENGTH_MAX];
     PROCESS_STATE state;
+    uint32_t      memory_kb; // <-- Tambahkan ini untuk tracking memori (KB)
+};
+
+// Node Linked-List untuk Dynamic Process Page Tracking
+struct ProcessPageNode {
+    void                   *virtual_address;
+    struct ProcessPageNode *next;
 };
 
 struct ProcessMemory {
-    void    *virtual_address;
-    uint32_t page_frame_count;
+    void                   *virtual_address;
+    uint32_t                page_frame_count;
+    struct ProcessPageNode *page_list_head; // <-- Linked-list pelacak seluruh frame halaman
+    void                   *heap_head;      // <-- Pointer blok awal heap proses
+    uint32_t                heap_top;       // <-- Batas atas virtual address heap proses
 };
 
 struct ProcessControlBlock {
@@ -58,5 +68,6 @@ extern struct ProcessControlBlock _process_list[PROCESS_COUNT_MAX];
 struct ProcessControlBlock* process_get_current_running_pcb_pointer(void);
 int32_t process_create_user_process(struct EXT2DriverRequest request, const char *args);
 bool process_destroy(uint32_t pid);
+bool process_track_and_allocate_page(struct ProcessControlBlock *pcb, void *vaddr); // <-- Tambahkan prototipe ini
 
 #endif

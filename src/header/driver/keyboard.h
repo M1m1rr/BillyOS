@@ -29,10 +29,15 @@ extern const char keyboard_scancode_1_to_ascii_map[256];
  * @param keyboard_input_on  Indicate whether keyboard ISR is activated or not
  * @param keyboard_buffer    Storing keyboard input values in ASCII
  */
+
+#define KEYBOARD_BUFFER_SIZE 16
+
 struct KeyboardDriverState {
     bool read_extended_mode;
     bool keyboard_input_on;
-    char keyboard_buffer;
+    char buffer[KEYBOARD_BUFFER_SIZE];
+    uint8_t buf_head;
+    uint8_t buf_tail;
 } __attribute((packed));
 
 

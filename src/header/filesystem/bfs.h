@@ -5,7 +5,7 @@
 #include <stdbool.h>
 
 #define BFS_MAGIC            0x42494C4C // "BILL"
-#define BFS_START_LBA        4096       // Sektor awal di storage.bin (2 MB aman)
+#define BFS_START_LBA        32768       // Sektor awal di storage.bin (2 MB aman)
 #define BFS_TOTAL_BLOCKS     4096       // Total 4096 blok (2 MB)
 #define BFS_BLOCK_SIZE       512        // Ukuran per blok/sektor
 #define BFS_MAX_NAME         32         // Panjang maksimal nama file/folder

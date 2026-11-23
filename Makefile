@@ -50,6 +50,7 @@ kernel:
 	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/memory/paging.c -o $(OUTPUT_FOLDER)/paging.o
 	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/stdlib/string.c -o $(OUTPUT_FOLDER)/string.o
 	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/memory/swap.c -o $(OUTPUT_FOLDER)/swap.o
+	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/memory/heap.c -o $(OUTPUT_FOLDER)/heap.o
 	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/process/process.c -o $(OUTPUT_FOLDER)/process.o
 	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/scheduler/scheduler.c -o $(OUTPUT_FOLDER)/scheduler.o
 	@$(LIN) $(LFLAGS) bin/*.o -o $(OUTPUT_FOLDER)/kernel
@@ -65,7 +66,8 @@ iso: kernel
 	@rm -r $(OUTPUT_FOLDER)/iso/
 
 disk:
-	@qemu-img create -f raw $(OUTPUT_FOLDER)/$(DISK_NAME).bin 4M
+	@$(CC) $(SOURCE_FOLDER)/external/init_storage.c -o $(OUTPUT_FOLDER)/init_storage
+	@$(OUTPUT_FOLDER)/init_storage .kit/ch2/sample-image.bin $(OUTPUT_FOLDER)/$(DISK_NAME).bin
 
 inserter:
 	@$(CC) -Wno-builtin-declaration-mismatch -g -I$(SOURCE_FOLDER) \
@@ -131,7 +133,15 @@ user-draw:
 	@echo Linking object draw...
 	@rm -f *.o
 
-insert-shell: inserter user-shell user-hello user-loop user-clock user-fib user-echo user-draw
+user-doom:
+	@$(ASM) $(AFLAGS) $(SOURCE_FOLDER)/crt0.s -o crt0.o
+	@$(CC)  $(CFLAGS) -w -Os -fno-pie $(SOURCE_FOLDER)/user-doom.c -o user-doom.o
+	@$(LIN) -T $(SOURCE_FOLDER)/user-linker.ld -melf_i386 --oformat=binary \
+		crt0.o user-doom.o -o $(OUTPUT_FOLDER)/doom
+	@echo Linking object doom...
+	@rm -f *.o
+
+insert-shell: inserter user-shell user-hello user-loop user-clock user-fib user-echo user-draw user-doom
 	@echo Inserting binaries into root directory...
 	@cd $(OUTPUT_FOLDER); ./inserter -f shell 1 $(DISK_NAME).bin
 	@cd $(OUTPUT_FOLDER); ./inserter -f hello 1 $(DISK_NAME).bin
@@ -140,4 +150,6 @@ insert-shell: inserter user-shell user-hello user-loop user-clock user-fib user-
 	@cd $(OUTPUT_FOLDER); ./inserter -f fib 1 $(DISK_NAME).bin
 	@cd $(OUTPUT_FOLDER); ./inserter -f echo 1 $(DISK_NAME).bin
 	@cd $(OUTPUT_FOLDER); ./inserter -f draw 1 $(DISK_NAME).bin
+	@cd $(OUTPUT_FOLDER); ./inserter -f doom 1 $(DISK_NAME).bin
+	@cd $(OUTPUT_FOLDER); ./inserter -f doom1.wad 1 $(DISK_NAME).bin
 	@./bin/inserter -f banner 1 bin/$(DISK_NAME).bin

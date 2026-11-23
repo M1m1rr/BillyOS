@@ -40,7 +40,7 @@ int main(void) {
             buf[9] = ' ';
             buf[10] = '\0';
 
-            syscall(15, (uint32_t) buf, (24 << 16) | 70, 0x0E);
+            syscall(15, (uint32_t) buf, (29 << 16) | 70, 0x0E);
         }
 
         for (volatile int i = 0; i < 50000; i++);

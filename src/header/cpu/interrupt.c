@@ -10,6 +10,7 @@
 #include "header/driver/cmos.h"
 #include "header/driver/vga.h"
 #include "header/filesystem/bfs.h"
+#include "header/memory/heap.h"
 
 void io_wait(void) {
     out(0x80, 0);
@@ -245,6 +246,40 @@ static void syscall(struct InterruptFrame frame) {
             // Kembalikan status eksekusi via pointer di ECX (standar arsitektur BillyOS)
             if (frame.cpu.general.ecx != 0) {
                 *((int32_t*) frame.cpu.general.ecx) = ret;
+            }
+            break;
+        }
+        case 20: {
+            // Syscall 20: Dynamic Heap Memory Manager
+            // EBX = Action: 0 = user_malloc, 1 = user_free
+            // ECX = Pointer hasil / parameter (void** ptr untuk malloc, bool* ok untuk free)
+            // EDX = Argument (uint32_t size untuk malloc, void* ptr untuk free)
+            if (frame.cpu.general.ebx == 0) {
+                void **out_ptr = (void**) frame.cpu.general.ecx;
+                if (out_ptr != NULL) {
+                    *out_ptr = user_malloc(frame.cpu.general.edx);
+                }
+            } else if (frame.cpu.general.ebx == 1) {
+                bool *out_ok = (bool*) frame.cpu.general.ecx;
+                if (out_ok != NULL) {
+                    *out_ok = user_free((void*) frame.cpu.general.edx);
+                }
+            }
+            break;
+        }
+        case 21: {
+            // Syscall 21: Antarmuka VGA Mode 13h (320x200, 256 Warna)
+            // EBX = Perintah (0: Set Mode 13h, 1: Set Palet 256, 2: Blit Frame 256, 3: Restore Mode 12h)
+            // ECX = Parameter pointer buffer (palet atau frame)
+            uint32_t cmd = frame.cpu.general.ebx;
+            if (cmd == 0) {
+                vga_set_mode_13h();
+            } else if (cmd == 1) {
+                vga_set_palette_256((const uint8_t*) frame.cpu.general.ecx);
+            } else if (cmd == 2) {
+                vga_blit_256((const uint8_t*) frame.cpu.general.ecx);
+            } else if (cmd == 3) {
+                vga_init_graphics_mode(); // Kembali ke Mode 12h 640x480 BillyOS
             }
             break;
         }

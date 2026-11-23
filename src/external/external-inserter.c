@@ -48,35 +48,46 @@ int main(int argc, char *argv[]) {
     const char *parent_str  = argv[argi + 1];
     const char *storage_path = argv[argi + 2];
 
-    // Read storage into memory, requiring 4 MB memory
-    image_storage = malloc(4*1024*1024);
-    file_buffer   = malloc(4*1024*1024);
-    read_buffer   = malloc(4*1024*1024);
-    if (image_storage == NULL || file_buffer == NULL || read_buffer == NULL) {
-        fprintf(stderr, "inserter: out of host memory\n");
-        exit(1);
-    }
-
-    FILE *fptr = fopen(storage_path, "rb+");
+        FILE *fptr = fopen(storage_path, "rb+");
     if (fptr == NULL) {
         fprintf(stderr, "inserter: failed to open storage '%s'\n", storage_path);
         exit(1);
     }
-    size_t read_count = fread(image_storage, 4*1024*1024, 1, fptr);
-    if (read_count != 1) {
-        fprintf(stderr, "inserter: failed to read storage (expected 4MiB)\n");
+    fseek(fptr, 0, SEEK_END);
+    size_t storage_size = ftell(fptr);
+    fseek(fptr, 0, SEEK_SET);
+
+    image_storage = malloc(storage_size);
+    if (image_storage == NULL) {
+        fprintf(stderr, "inserter: out of host memory\n");
+        fclose(fptr);
+        exit(1);
+    }
+    if (fread(image_storage, 1, storage_size, fptr) != storage_size) {
+        fprintf(stderr, "inserter: failed to read storage\n");
         fclose(fptr);
         exit(1);
     }
 
-    // Read target file, assuming file is less than 4 MiB
     FILE *fptr_target = fopen(target_path, "rb");
     if (fptr_target == NULL) {
         fprintf(stderr, "inserter: cannot open input file '%s'\n", target_path);
         fclose(fptr);
         exit(1);
     }
-    size_t filesize = fread(file_buffer, 1, 4*1024*1024, fptr_target);
+    fseek(fptr_target, 0, SEEK_END);
+    size_t filesize = ftell(fptr_target);
+    fseek(fptr_target, 0, SEEK_SET);
+
+    file_buffer = malloc(filesize);
+    read_buffer = malloc(filesize);
+    if (file_buffer == NULL || read_buffer == NULL) {
+        fprintf(stderr, "inserter: out of host memory for target\n");
+        fclose(fptr);
+        fclose(fptr_target);
+        exit(1);
+    }
+    fread(file_buffer, 1, filesize, fptr_target);
     fclose(fptr_target);
 
     printf("Filename : %s\n",  target_path);
@@ -136,7 +147,7 @@ int main(int argc, char *argv[]) {
 
     // Write image in memory into original, overwrite them
     fseek(fptr, 0, SEEK_SET);
-    fwrite(image_storage, 4 * 1024 * 1024, 1, fptr);
+    fwrite(image_storage, 1, storage_size, fptr);
     fclose(fptr);
 
     return 0;

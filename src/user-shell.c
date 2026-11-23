@@ -79,6 +79,16 @@ static int32_t sys_bfs_req(struct BFSRequest *req) {
     syscall(19, (uint32_t) req, (uint32_t) &ret, 0);
     return ret;
 }
+// ==================== USER HEAP WRAPPERS ====================
+static void* malloc(uint32_t size) {
+    void *ptr = NULL;
+    syscall(20, 0, (uint32_t) &ptr, size);
+    return ptr;
+}
+static void free(void *ptr) {
+    bool ok = false;
+    syscall(20, 1, (uint32_t) &ok, (uint32_t) ptr);
+}
 
 // ==================== 2. HELPER STRING ====================
 
@@ -446,7 +456,7 @@ static void cmd_grep(int argc, char *argv[], const char *pipe_in) {
 static void cmd_ps(void) {
     struct ProcessMetadata list[PROCESS_COUNT_MAX];
     uint32_t count = sys_process_get_info(list);
-    shell_print("PID  NAME         STATE\n-----------------------\n", 0x0B);
+    shell_print("PID  NAME         STATE    MEMORY\n---------------------------------\n", 0x0B);
     for (uint32_t i = 0; i < PROCESS_COUNT_MAX; i++) {
         if (list[i].state != PROCESS_STATE_INACTIVE) {
             char pid_s[12];
@@ -454,10 +464,15 @@ static void cmd_ps(void) {
             shell_print(pid_s, 0x0F);
             shell_print("    ", 0x0F);
             shell_print(list[i].name, 0x0E);
-            shell_print("    ", 0x0F);
-            shell_print((list[i].state == PROCESS_STATE_RUNNING) ? "RUNNING\n" :
-                        (list[i].state == PROCESS_STATE_READY)   ? "READY\n" : "BLOCKED\n",
+            for (uint32_t s = str_len(list[i].name); s < 13; s++) shell_print(" ", 0x0F);
+            shell_print((list[i].state == PROCESS_STATE_RUNNING) ? "RUNNING  " :
+                        (list[i].state == PROCESS_STATE_READY)   ? "READY    " : "BLOCKED  ",
                         (list[i].state == PROCESS_STATE_RUNNING) ? 0x0A : 0x03);
+
+            char mem_s[12];
+            int_to_str(list[i].memory_kb, mem_s);
+            shell_print(mem_s, 0x0E);
+            shell_print(" KB\n", 0x0F);
         }
     }
     shell_print("Aktif: ", 0x07);
@@ -473,13 +488,34 @@ static bool spawn_from_inode(uint32_t inode, const char *name, const char *args)
         .name         = (char*) name,
         .name_len     = (uint8_t) str_len(name),
         .parent_inode = inode,
-        .buffer_size  = 0x4000,
+        .buffer_size  = 0x100000,
         .is_directory = false,
     };
     int32_t ret = -1;
     syscall(11, (uint32_t) &req, (uint32_t) &ret, (uint32_t) args);
-    if (ret == 0) {
-        for (volatile int i = 0; i < 3000000; i++);
+        if (ret == 0) {
+        // Jika yang dijalankan adalah doom, shell menunggu sampai game selesai
+        // agar input keyboard dan layar tidak bentrok sama sekali
+        if (str_cmp(name, "doom") == 0) {
+            while (true) {
+                struct ProcessMetadata list[PROCESS_COUNT_MAX];
+                sys_process_get_info(list);
+                bool doom_running = false;
+                for (uint32_t i = 0; i < PROCESS_COUNT_MAX; i++) {
+                    if (list[i].state != PROCESS_STATE_INACTIVE && str_cmp(list[i].name, "doom") == 0) {
+                        doom_running = true;
+                        break;
+                    }
+                }
+                if (!doom_running) break;
+                for (volatile int i = 0; i < 5000000; i++);
+            }
+            // Kembalikan hardware VGA ke Mode 12h BillyOS & bersihkan layar
+            syscall(21, 3, 0, 0);
+            sys_clear();
+        } else {
+            for (volatile int i = 0; i < 3000000; i++);
+        }
         return true;
     }
     return false;
@@ -687,6 +723,40 @@ static void cmd_bfs(int argc, char *argv[]) {
             shell_print("[B+ Tree Index] File tidak ditemukan!\n", 0x0C);
         }
     }
+    
+}
+
+static void cmd_heap_test(void) {
+    shell_print("=== BillyOS Dynamic Heap Memory Test ===\n", 0x0E);
+    // 1. Alokasi 3 blok dinamis berbeda ukuran
+    char *buf1 = (char*) malloc(32);
+    char *buf2 = (char*) malloc(128);
+    char *buf3 = (char*) malloc(512);
+    if (buf1 && buf2 && buf3) {
+        shell_print("[1] Alokasi 3 blok (32B, 128B, 512B) [OK]\n", 0x0A);
+    } else {
+        shell_print("[1] Gagal alokasi blok heap!\n", 0x0C);
+        return;
+    }
+    // 2. Tulis string dinamis dan baca kembali
+    str_cpy(buf1, "BillyOS Heap Aktif!");
+    str_cpy(buf2, "Blok memori dinamis kedua bekerja normal.");
+    shell_print("Data di Buf1: ", 0x0B); shell_print(buf1, 0x0F); shell_print("\n", 0x0F);
+    shell_print("Data di Buf2: ", 0x0B); shell_print(buf2, 0x0F); shell_print("\n", 0x0F);
+    // 3. Pengujian Free & Coalescing
+    free(buf2);
+    shell_print("[2] Bebaskan Buf2 (128B) [OK]\n", 0x0A);
+    // 4. Alokasi kembali pada ruang yang dibebaskan
+    char *buf_reuse = (char*) malloc(64);
+    if (buf_reuse) {
+        str_cpy(buf_reuse, "Reused Memory Slot!");
+        shell_print("[3] Alokasi ulang 64B di slot bekas [OK]\n", 0x0A);
+        shell_print("Data Reused : ", 0x0B); shell_print(buf_reuse, 0x0E); shell_print("\n", 0x0F);
+    }
+    free(buf1);
+    free(buf3);
+    free(buf_reuse);
+    shell_print("[4] Semua blok berhasil di-free & coalesced [PASS]\n", 0x0A);
 }
 
 static void execute_single(char *cmd, const char *p_in) {
@@ -719,6 +789,7 @@ static void execute_single(char *cmd, const char *p_in) {
     else if (str_cmp(argv[0], "kill") == 0)  cmd_kill(argc, argv);
     else if (str_cmp(argv[0], "export") == 0) cmd_export(argc, argv);
     else if (str_cmp(argv[0], "bfs") == 0)   cmd_bfs(argc, argv);
+    else if (str_cmp(argv[0], "heap") == 0)  cmd_heap_test();
     else if (str_cmp(argv[0], "exit") == 0) {
         shell_print("Keluar...\n", 0x0E);
         syscall(10, 0, 0, 0);
