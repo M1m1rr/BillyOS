@@ -135,7 +135,7 @@ user-draw:
 
 user-doom:
 	@$(ASM) $(AFLAGS) $(SOURCE_FOLDER)/crt0.s -o crt0.o
-	@$(CC)  $(CFLAGS) -w -Os -fno-pie $(SOURCE_FOLDER)/user-doom.c -o user-doom.o
+	@$(CC)  $(CFLAGS) -std=gnu99 -w -Os -fno-pie $(SOURCE_FOLDER)/user-doom.c -o user-doom.o
 	@$(LIN) -T $(SOURCE_FOLDER)/user-linker.ld -melf_i386 --oformat=binary \
 		crt0.o user-doom.o -o $(OUTPUT_FOLDER)/doom
 	@echo Linking object doom...
