@@ -9,7 +9,7 @@ OUTPUT_FOLDER = bin
 ISO_NAME      = OS2025
 DISK_NAME     = storage
 
-# Flags
+# Flags.dat
 WARNING_CFLAG = -Wall -Wextra -Werror
 DEBUG_CFLAG   = -fshort-wchar -g
 STRIP_CFLAG   = -nostdlib -fno-stack-protector -nostartfiles -nodefaultlibs -ffreestanding
@@ -18,9 +18,10 @@ AFLAGS        = -f elf32 -g -F dwarf
 LFLAGS        = -T $(SOURCE_FOLDER)/linker.ld -melf_i386
 
 run: all
-	@qemu-system-i386 \
+	@qemu-system-i386 -audiodev pa,id=snd0,timer-period=2000,out.latency=150000 -machine pcspk-audiodev=snd0 \
 	-drive file=$(OUTPUT_FOLDER)/$(DISK_NAME).bin,format=raw,if=ide,index=0,media=disk \
 	-cdrom $(OUTPUT_FOLDER)/$(ISO_NAME).iso
+
 debug: all
 	@qemu-system-i386 -s -S \
 	-drive file=$(OUTPUT_FOLDER)/$(DISK_NAME).bin,format=raw,if=ide,index=0,media=disk \
@@ -45,6 +46,7 @@ kernel:
 	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/header/driver/keyboard.c -o $(OUTPUT_FOLDER)/keyboard.o
 	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/header/driver/disk.c -o $(OUTPUT_FOLDER)/disk.o
 	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/header/driver/cmos.c -o $(OUTPUT_FOLDER)/cmos.o
+	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/header/driver/speaker.c -o $(OUTPUT_FOLDER)/speaker.o
 	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/filesystem/ext2.c -o $(OUTPUT_FOLDER)/ext2.o
 	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/filesystem/bfs.c -o $(OUTPUT_FOLDER)/bfs.o
 	@$(CC) $(CFLAGS) $(SOURCE_FOLDER)/memory/paging.c -o $(OUTPUT_FOLDER)/paging.o
@@ -141,7 +143,15 @@ user-doom:
 	@echo Linking object doom...
 	@rm -f *.o
 
-insert-shell: inserter user-shell user-hello user-loop user-clock user-fib user-echo user-draw user-doom
+user-badapple:
+	@$(ASM) $(AFLAGS) $(SOURCE_FOLDER)/crt0-echo.s -o crt0-echo.o
+	@$(CC)  $(CFLAGS) -Os -fno-pie $(SOURCE_FOLDER)/user-badapple.c -o user-badapple.o
+	@$(LIN) -T $(SOURCE_FOLDER)/user-linker.ld -melf_i386 --oformat=binary \
+		crt0-echo.o user-badapple.o -o $(OUTPUT_FOLDER)/badapple
+	@echo Linking object badapple...
+	@rm -f *.o
+
+insert-shell: inserter user-shell user-hello user-loop user-clock user-fib user-echo user-draw user-doom user-badapple
 	@echo Inserting binaries into root directory...
 	@cd $(OUTPUT_FOLDER); ./inserter -f shell 1 $(DISK_NAME).bin
 	@cd $(OUTPUT_FOLDER); ./inserter -f hello 1 $(DISK_NAME).bin
@@ -152,4 +162,11 @@ insert-shell: inserter user-shell user-hello user-loop user-clock user-fib user-
 	@cd $(OUTPUT_FOLDER); ./inserter -f draw 1 $(DISK_NAME).bin
 	@cd $(OUTPUT_FOLDER); ./inserter -f doom 1 $(DISK_NAME).bin
 	@cd $(OUTPUT_FOLDER); ./inserter -f doom1.wad 1 $(DISK_NAME).bin
+	@cd $(OUTPUT_FOLDER); ./inserter -f badapple 1 $(DISK_NAME).bin
+	@cd $(OUTPUT_FOLDER); ./inserter -f badapple.dat 1 $(DISK_NAME).bin
 	@./bin/inserter -f banner 1 bin/$(DISK_NAME).bin
+	@./bin/inserter -f mario.mus 1 bin/$(DISK_NAME).bin
+	@./bin/inserter -f tetris.mus 1 bin/$(DISK_NAME).bin
+	@./bin/inserter -f starwars.mus 1 bin/$(DISK_NAME).bin
+	@./bin/inserter -f zelda.mus 1 bin/$(DISK_NAME).bin
+	@./bin/inserter -f lagu.mus 1 bin/$(DISK_NAME).bin

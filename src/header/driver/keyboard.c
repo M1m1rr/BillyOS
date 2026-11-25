@@ -102,7 +102,9 @@ void keyboard_isr(void) {
 
     if (keyboard_state.keyboard_input_on) {
         if (extended) {
-            if (code == 0x48)      keyboard_buffer_push((char) 0xAD); // Up
+            if (code == 0x49 || (code == 0x48 && shift_active))      keyboard_buffer_push((char) 0xB0); // PageUp / Shift+Up (Scroll Up)
+            else if (code == 0x51 || (code == 0x50 && shift_active)) keyboard_buffer_push((char) 0xB1); // PageDown / Shift+Down (Scroll Down)
+            else if (code == 0x48) keyboard_buffer_push((char) 0xAD); // Up
             else if (code == 0x50) keyboard_buffer_push((char) 0xAF); // Down
             else if (code == 0x4B) keyboard_buffer_push((char) 0xAC); // Left
             else if (code == 0x4D) keyboard_buffer_push((char) 0xAE); // Right

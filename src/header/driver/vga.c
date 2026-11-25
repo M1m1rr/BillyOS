@@ -12,6 +12,16 @@ static char    text_screen[VGA_TEXT_ROWS][VGA_TEXT_COLS];
 static uint8_t text_fg_buf[VGA_TEXT_ROWS][VGA_TEXT_COLS];
 static uint8_t text_bg_buf[VGA_TEXT_ROWS][VGA_TEXT_COLS];
 
+#define SCROLLBACK_LINES 128
+static char    sb_char[SCROLLBACK_LINES][VGA_TEXT_COLS];
+static uint8_t sb_fg[SCROLLBACK_LINES][VGA_TEXT_COLS];
+static uint8_t sb_bg[SCROLLBACK_LINES][VGA_TEXT_COLS];
+static int     sb_head = 0;
+static int     sb_count = 0;
+static int     scroll_view = 0;
+static int     saved_cursor_row = 0;
+static int     saved_cursor_col = 0;
+
 // ==================== 1. TABEL REGISTER VGA MODE 12h ====================
 
 static const uint8_t vga_mode12_seq[] = {
@@ -187,6 +197,41 @@ static uint8_t get_font_line(char c, int line) {
 
 // ==================== 3. INISIALISASI MODE ====================
 
+// Mengembalikan 16 entri DAC standar Mode 12h (CGA/EGA palette) agar warna
+// terminal/GUI tetap akurat setelah keluar dari Mode 13h (DOOM / Bad Apple).
+static void vga_restore_mode12_palette(void) {
+    static const uint8_t dac_indices[16] = {
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x14, 0x07,
+        0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F
+    };
+    static const uint8_t std_dac[16][3] = {
+        {  0,  0,  0 }, // 0: Black
+        {  0,  0, 42 }, // 1: Blue
+        {  0, 42,  0 }, // 2: Green
+        {  0, 42, 42 }, // 3: Cyan
+        { 42,  0,  0 }, // 4: Red
+        { 42,  0, 42 }, // 5: Magenta
+        { 42, 21,  0 }, // 6: Brown
+        { 42, 42, 42 }, // 7: Light Gray
+        { 21, 21, 21 }, // 8: Dark Gray
+        { 21, 21, 63 }, // 9: Light Blue
+        { 21, 63, 21 }, // 10: Light Green
+        { 21, 63, 63 }, // 11: Light Cyan
+        { 63, 21, 21 }, // 12: Light Red
+        { 63, 21, 63 }, // 13: Light Magenta
+        { 63, 63, 21 }, // 14: Yellow
+        { 63, 63, 63 }  // 15: Bright White
+    };
+
+    out(0x3C6, 0xFF);
+    for (int i = 0; i < 16; i++) {
+        out(0x3C8, dac_indices[i]);
+        out(0x3C9, std_dac[i][0]);
+        out(0x3C9, std_dac[i][1]);
+        out(0x3C9, std_dac[i][2]);
+    }
+}
+
 void vga_init_graphics_mode(void) {
     out(0x3C2, 0xE3);
 
@@ -216,6 +261,7 @@ void vga_init_graphics_mode(void) {
     in(0x3DA);
     out(0x3C0, 0x20);
 
+    vga_restore_mode12_palette();
     in_graphics_mode = true;
     in_mode_13h = false;
     vga_clear_screen(VGA_COLOR_BLACK);
@@ -326,16 +372,12 @@ void vga_clear_screen(uint8_t color) {
     memset(text_screen, ' ', sizeof(text_screen));
     memset(text_fg_buf, 0x07, sizeof(text_fg_buf));
     memset(text_bg_buf, color, sizeof(text_bg_buf));
+    sb_head = 0;
+    sb_count = 0;
+    scroll_view = 0;
 }
 
-void vga_draw_char(int col, int row, char c, uint8_t fg, uint8_t bg) {
-    if (in_mode_13h) return; // Lindungi Mode 13h
-    if (col < 0 || col >= VGA_TEXT_COLS || row < 0 || row >= VGA_TEXT_ROWS) return;
-
-    text_screen[row][col] = c;
-    text_fg_buf[row][col] = fg;
-    text_bg_buf[row][col] = bg;
-
+static void vga_render_cell(int col, int row, char c, uint8_t fg, uint8_t bg) {
     for (int l = 0; l < 16; l++) {
         uint8_t glyph = get_font_line(c, l);
         uint16_t offset = (row * 16 + l) * (VGA_WIDTH / 8) + col;
@@ -355,6 +397,78 @@ void vga_draw_char(int col, int row, char c, uint8_t fg, uint8_t bg) {
         (void) dummy2;
         *vram = fg;
     }
+}
+
+static void vga_erase_cursor(void);
+
+static void vga_redraw_viewport(void) {
+    for (int r = 0; r < 29; r++) {
+        int pos = r - scroll_view;
+        if (pos >= 0) {
+            for (int col = 0; col < VGA_TEXT_COLS; col++) {
+                vga_render_cell(col, r, text_screen[pos][col], text_fg_buf[pos][col], text_bg_buf[pos][col]);
+            }
+        } else {
+            int k = -pos;
+            int idx = (sb_head - k + SCROLLBACK_LINES) % SCROLLBACK_LINES;
+            for (int col = 0; col < VGA_TEXT_COLS; col++) {
+                vga_render_cell(col, r, sb_char[idx][col], sb_fg[idx][col], sb_bg[idx][col]);
+            }
+        }
+    }
+    if (scroll_view > 0) {
+        char tag[12];
+        tag[0] = '['; tag[1] = 'U'; tag[2] = 'P'; tag[3] = ' ';
+        tag[4] = '+';
+        int v = scroll_view;
+        tag[5] = (v >= 100) ? (char)('0' + (v / 100) % 10) : ' ';
+        tag[6] = (v >= 10)  ? (char)('0' + (v / 10) % 10)  : ' ';
+        tag[7] = (char)('0' + (v % 10));
+        tag[8] = ']'; tag[9] = '\0';
+        for (int i = 0; i < 9; i++) {
+            vga_render_cell(71 + i, 0, tag[i], VGA_COLOR_YELLOW, VGA_COLOR_BLUE);
+        }
+    }
+}
+
+void vga_scroll_lines(int delta) {
+    if (in_mode_13h || !in_graphics_mode) return;
+    if (sb_count == 0 && scroll_view == 0) return;
+
+    int prev_view = scroll_view;
+    int next_view = (delta == 0) ? 0 : (scroll_view + delta);
+    if (next_view < 0) next_view = 0;
+    if (next_view > sb_count) next_view = sb_count;
+    if (next_view == prev_view) return;
+
+    if (prev_view == 0 && next_view > 0) {
+        saved_cursor_row = cur_cursor_row;
+        saved_cursor_col = cur_cursor_col;
+        vga_erase_cursor();
+    }
+
+    scroll_view = next_view;
+    vga_redraw_viewport();
+
+    if (scroll_view == 0) {
+        vga_set_cursor(saved_cursor_row, saved_cursor_col);
+    }
+}
+
+void vga_draw_char(int col, int row, char c, uint8_t fg, uint8_t bg) {
+    if (in_mode_13h) return; // Lindungi Mode 13h
+    if (col < 0 || col >= VGA_TEXT_COLS || row < 0 || row >= VGA_TEXT_ROWS) return;
+
+    if (row < 29 && scroll_view > 0) {
+        scroll_view = 0;
+        vga_redraw_viewport();
+        vga_set_cursor(saved_cursor_row, saved_cursor_col);
+    }
+
+    text_screen[row][col] = c;
+    text_fg_buf[row][col] = fg;
+    text_bg_buf[row][col] = bg;
+    vga_render_cell(col, row, c, fg, bg);
 }
 
 // Fungsi helper untuk menghapus kursor dari VRAM sebelum scroll atau pindah posisi
@@ -391,6 +505,11 @@ static void vga_erase_cursor(void) {
 void vga_set_cursor(int row, int col) {
     if (in_mode_13h) return; // Lindungi Mode 13h
     if (!in_graphics_mode) return;
+    if (scroll_view > 0 && row < 29) {
+        saved_cursor_row = row;
+        saved_cursor_col = col;
+        return;
+    }
 
     // 1. Hapus kursor lama
     vga_erase_cursor();
@@ -438,7 +557,16 @@ void vga_scroll(void) {
         VGA_VRAM[i] = VGA_COLOR_BLACK;
     }
 
-    // 4. Geser buffer teks hanya untuk baris 0 s.d. 28
+    // 4. Simpan baris paling atas ke scrollback sebelum digeser keluar
+    for (int col = 0; col < VGA_TEXT_COLS; col++) {
+        sb_char[sb_head][col] = text_screen[0][col];
+        sb_fg[sb_head][col]   = text_fg_buf[0][col];
+        sb_bg[sb_head][col]   = text_bg_buf[0][col];
+    }
+    sb_head = (sb_head + 1) % SCROLLBACK_LINES;
+    if (sb_count < SCROLLBACK_LINES) sb_count++;
+
+    // 5. Geser buffer teks hanya untuk baris 0 s.d. 28
     memmove(text_screen[0], text_screen[1], 28 * VGA_TEXT_COLS);
     memmove(text_fg_buf[0], text_fg_buf[1], 28 * VGA_TEXT_COLS);
     memmove(text_bg_buf[0], text_bg_buf[1], 28 * VGA_TEXT_COLS);
