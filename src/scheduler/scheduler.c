@@ -1,6 +1,8 @@
 #include "header/scheduler/scheduler.h"
 #include "header/cpu/interrupt.h"
 #include "header/memory/paging.h"
+#include "header/driver/vga.h"
+#include "header/driver/framebuffer.h"
 
 static uint32_t current_process_index = 0;
 
@@ -32,6 +34,11 @@ static int32_t scheduler_get_next_process_index(void) {
 __attribute__((noreturn)) void scheduler_switch_to_next_process(void) {
     int32_t next_index = scheduler_get_next_process_index();
     if (next_index < 0) {
+        // Kembalikan mode grafis VGA ke Mode 12h & bersihkan layar sebelum respawn
+        vga_init_graphics_mode();
+        framebuffer_clear();
+        console_set_position(0, 0);
+
         // Jika seluruh proses selesai/keluar, respawn shell agar OS tidak freeze di hlt dengan IF=0
         struct EXT2DriverRequest req_shell = {
             .buf          = (void*) 0x00000000,

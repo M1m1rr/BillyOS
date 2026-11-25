@@ -358,18 +358,37 @@ static void int_to_str_simple(uint32_t val, char *buf) {
     buf[j] = '\0';
 }
 
+static void uint_to_hex_str(uint32_t val, char *buf) {
+    static const char hex_digits[] = "0123456789ABCDEF";
+    buf[0] = '0';
+    buf[1] = 'x';
+    for (int i = 7; i >= 0; i--) {
+        buf[2 + (7 - i)] = hex_digits[(val >> (i * 4)) & 0xF];
+    }
+    buf[10] = '\0';
+}
+
 static void handle_cpu_exception(struct InterruptFrame frame) {
+    char num_buf[16];
+    int_to_str_simple(frame.int_number, num_buf);
+    char eip_buf[16];
+    uint_to_hex_str(frame.int_stack.eip, eip_buf);
+
     if ((frame.int_stack.cs & 0x3) == 0x3) {
         // Terjadi di User Mode (Ring 3): bunuh proses yang crash agar sistem tidak loop/hang
         struct ProcessControlBlock *crashed_pcb = process_get_current_running_pcb_pointer();
         if (crashed_pcb != NULL) {
-            console_puts("\n[Process crashed: Exception ", 28, 0x0C);
-            char num_buf[16];
-            int_to_str_simple(frame.int_number, num_buf);
-            console_puts(num_buf, str_len_simple(num_buf), 0x0E);
-            console_puts(" in '", 5, 0x0C);
+            console_puts("\n[Process '", 11, 0x0C);
             console_puts(crashed_pcb->metadata.name, str_len_simple(crashed_pcb->metadata.name), 0x0E);
-            console_puts("']\n", 3, 0x0C);
+            console_puts("' (PID ", 7, 0x0C);
+            char pid_buf[16];
+            int_to_str_simple(crashed_pcb->metadata.pid, pid_buf);
+            console_puts(pid_buf, str_len_simple(pid_buf), 0x0E);
+            console_puts(") crashed: Exception ", 21, 0x0C);
+            console_puts(num_buf, str_len_simple(num_buf), 0x0E);
+            console_puts(" at EIP ", 8, 0x0C);
+            console_puts(eip_buf, str_len_simple(eip_buf), 0x0E);
+            console_puts("]\n", 2, 0x0C);
 
             process_destroy(crashed_pcb->metadata.pid);
         }
@@ -377,9 +396,9 @@ static void handle_cpu_exception(struct InterruptFrame frame) {
     } else {
         // Terjadi di Kernel Mode (Ring 0): Kernel Panic
         console_puts("\n*** KERNEL PANIC: CPU Exception ", 32, 0x4F);
-        char num_buf[16];
-        int_to_str_simple(frame.int_number, num_buf);
         console_puts(num_buf, str_len_simple(num_buf), 0x4E);
+        console_puts(" at EIP ", 8, 0x4F);
+        console_puts(eip_buf, str_len_simple(eip_buf), 0x4E);
         console_puts(" ***\n", 5, 0x4F);
         while (1) {
             __asm__ volatile("cli; hlt");

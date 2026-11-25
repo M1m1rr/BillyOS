@@ -111,3 +111,15 @@ bool page_fault_handler(void) {
 
     return false; // Bukan page di swap (akses ilegal)
 }
+
+void swap_release_page_directory(struct PageDirectory *page_dir) {
+    if (page_dir == NULL) return;
+    for (uint32_t i = 0; i < SWAP_MAX_PAGES; i++) {
+        if (swap_manager_state.slots[i].used && swap_manager_state.slots[i].page_dir == page_dir) {
+            swap_manager_state.slots[i].used = false;
+            swap_manager_state.slots[i].virtual_address = 0;
+            swap_manager_state.slots[i].page_dir = NULL;
+            swap_manager_state.free_slots_count++;
+        }
+    }
+}

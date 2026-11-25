@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include "header/memory/paging.h"
 #include "header/stdlib/string.h"
+#include "header/memory/swap.h"
 
 // Page directory dan page table kernel, wajib aligned 4 KiB (0x1000)
 __attribute__((aligned(0x1000))) struct PageDirectory _paging_kernel_page_directory;
@@ -202,25 +203,60 @@ struct PageDirectory* paging_create_new_page_directory(void) {
 }
 
 bool paging_free_page_directory(struct PageDirectory *page_dir) {
-    if (page_dir == paging_get_current_page_directory_addr()) {
-        paging_use_page_directory(&_paging_kernel_page_directory);
+    if (page_dir == NULL) return false;
+
+    // Pastikan page_dir aktif sementara di CR3 agar recursive mapping bisa mengakses tabel-tabelnya
+    struct PageDirectory *prev_pd = paging_get_current_page_directory_addr();
+    if (prev_pd != page_dir) {
+        paging_use_page_directory(page_dir);
     }
 
     for (uint32_t i = 0; i < PAGING_DIRECTORY_TABLE_MAX_COUNT; i++) {
         if (&page_directory_list[i] == page_dir) {
+            // Telusuri seluruh entri user space (0 s.d. 0x2FF, sebelum kernel base 0x300 = 0xC0000000)
             for (uint32_t d = 0; d < 0x300; d++) {
                 if (page_dir->table[d].flag.present_bit) {
+                    // Dapatkan pointer virtual page table via recursive mapping
+                    struct PageTable *pt = (struct PageTable *)(RECURSIVE_PAGE_TABLES_VIRTUAL_ADDRESS + d * PAGE_FRAME_SIZE);
+                    if (pt != NULL) {
+                        for (uint32_t p = 0; p < PAGE_ENTRY_COUNT; p++) {
+                            if (pt->table[p].flag.present_bit) {
+                                uint32_t pfn = pt->table[p].physical_page_base_address;
+                                if (pfn >= KERNEL_RESERVED_PAGE_FRAME_COUNT && pfn < PAGE_FRAME_MAX_COUNT) {
+                                    if (page_manager_state.page_frame_map[pfn]) {
+                                        page_manager_state.page_frame_map[pfn] = false;
+                                        page_manager_state.free_page_frame_count++;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Bebaskan frame fisik dari Page Table itu sendiri
                     uint32_t pt_pfn = page_dir->table[d].page_table_base_address;
                     if (pt_pfn >= KERNEL_RESERVED_PAGE_FRAME_COUNT && pt_pfn < PAGE_FRAME_MAX_COUNT) {
-                        page_manager_state.page_frame_map[pt_pfn] = false;
-                        page_manager_state.free_page_frame_count++;
+                        if (page_manager_state.page_frame_map[pt_pfn]) {
+                            page_manager_state.page_frame_map[pt_pfn] = false;
+                            page_manager_state.free_page_frame_count++;
+                        }
                     }
                 }
             }
+
+            // Kembalikan CR3 ke kernel page directory
+            paging_use_page_directory(&_paging_kernel_page_directory);
+
+            // Lepaskan seluruh slot swap yang terkait dengan page directory ini
+            swap_release_page_directory(page_dir);
+
             memset(page_dir, 0, sizeof(struct PageDirectory));
             page_directory_manager.page_directory_used[i] = false;
             return true;
         }
+    }
+
+    if (paging_get_current_page_directory_addr() == page_dir) {
+        paging_use_page_directory(&_paging_kernel_page_directory);
     }
     return false;
 }
