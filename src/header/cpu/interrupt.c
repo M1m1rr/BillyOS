@@ -133,13 +133,17 @@ static void syscall(struct InterruptFrame frame) {
             struct ProcessControlBlock *current_pcb = process_get_current_running_pcb_pointer();
             bool is_self = (current_pcb != NULL && current_pcb->metadata.pid == target_pid);
 
-            bool success = process_destroy(target_pid);
-            if (frame.cpu.general.ecx != 0) {
-                *((bool*) frame.cpu.general.ecx) = success;
-            }
-
-            if (is_self && success) {
+            if (is_self) {
+                if (frame.cpu.general.ecx != 0) {
+                    *((bool*) frame.cpu.general.ecx) = true;
+                }
+                process_destroy(target_pid);
                 scheduler_switch_to_next_process();
+            } else {
+                bool success = process_destroy(target_pid);
+                if (frame.cpu.general.ecx != 0) {
+                    *((bool*) frame.cpu.general.ecx) = success;
+                }
             }
             break;
         }
@@ -329,6 +333,60 @@ static void syscall(struct InterruptFrame frame) {
     }   
 }
 
+static uint32_t str_len_simple(const char *s) {
+    uint32_t l = 0;
+    while (s && s[l]) l++;
+    return l;
+}
+
+static void int_to_str_simple(uint32_t val, char *buf) {
+    if (val == 0) {
+        buf[0] = '0';
+        buf[1] = '\0';
+        return;
+    }
+    char temp[12];
+    int i = 0;
+    while (val > 0) {
+        temp[i++] = (val % 10) + '0';
+        val /= 10;
+    }
+    int j = 0;
+    while (i > 0) {
+        buf[j++] = temp[--i];
+    }
+    buf[j] = '\0';
+}
+
+static void handle_cpu_exception(struct InterruptFrame frame) {
+    if ((frame.int_stack.cs & 0x3) == 0x3) {
+        // Terjadi di User Mode (Ring 3): bunuh proses yang crash agar sistem tidak loop/hang
+        struct ProcessControlBlock *crashed_pcb = process_get_current_running_pcb_pointer();
+        if (crashed_pcb != NULL) {
+            console_puts("\n[Process crashed: Exception ", 28, 0x0C);
+            char num_buf[16];
+            int_to_str_simple(frame.int_number, num_buf);
+            console_puts(num_buf, str_len_simple(num_buf), 0x0E);
+            console_puts(" in '", 5, 0x0C);
+            console_puts(crashed_pcb->metadata.name, str_len_simple(crashed_pcb->metadata.name), 0x0E);
+            console_puts("']\n", 3, 0x0C);
+
+            process_destroy(crashed_pcb->metadata.pid);
+        }
+        scheduler_switch_to_next_process();
+    } else {
+        // Terjadi di Kernel Mode (Ring 0): Kernel Panic
+        console_puts("\n*** KERNEL PANIC: CPU Exception ", 32, 0x4F);
+        char num_buf[16];
+        int_to_str_simple(frame.int_number, num_buf);
+        console_puts(num_buf, str_len_simple(num_buf), 0x4E);
+        console_puts(" ***\n", 5, 0x4F);
+        while (1) {
+            __asm__ volatile("cli; hlt");
+        }
+    }
+}
+
 void main_interrupt_handler(struct InterruptFrame frame) {
     switch (frame.int_number) {
         case PIC1_OFFSET + IRQ_TIMER: {
@@ -348,9 +406,6 @@ void main_interrupt_handler(struct InterruptFrame frame) {
         case PIC1_OFFSET + IRQ_KEYBOARD:
             keyboard_isr();
             break;
-        case 14: // Page Fault Exception (Vector 0x0E)
-            page_fault_handler();
-            break;
         case 0x30:
             // ISR stub memulihkan EFLAGS user (IF=1) lewat popf, jadi timer bisa menyela di tengah syscall.
             // Context switch selalu membuat iret frame ring 3, sehingga preempt di mode kernel merusak
@@ -358,7 +413,16 @@ void main_interrupt_handler(struct InterruptFrame frame) {
             __asm__ volatile("cli");
             syscall(frame);
             break;
+        case 14: // Page Fault Exception (Vector 0x0E)
+            if (page_fault_handler()) {
+                break;
+            }
+            handle_cpu_exception(frame);
+            break;
         default:
+            if (frame.int_number < 32) {
+                handle_cpu_exception(frame);
+            }
             break;
     }
 }

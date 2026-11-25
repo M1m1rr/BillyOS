@@ -70,7 +70,7 @@ int32_t process_create_user_process(struct EXT2DriverRequest request, const char
     }
 
     uint32_t page_frame_count_needed = ceil_div(request.buffer_size + PAGE_FRAME_SIZE, PAGE_FRAME_SIZE);
-    if (!paging_allocate_check(page_frame_count_needed)) {
+    if (!paging_allocate_check(page_frame_count_needed * PAGE_FRAME_SIZE)) {
         return PROCESS_CREATE_FAIL_NOT_ENOUGH_MEMORY;
     }
 
@@ -105,18 +105,53 @@ int32_t process_create_user_process(struct EXT2DriverRequest request, const char
     paging_use_page_directory(new_pd);
 
     uint32_t code_pages = ceil_div(request.buffer_size, PAGE_FRAME_SIZE);
+    bool alloc_ok = true;
     for (uint32_t i = 0; i < code_pages; i++) {
         void *vaddr = (void*) ((uint32_t) request.buf + i * PAGE_FRAME_SIZE);
-        process_track_and_allocate_page(new_pcb, vaddr);
+        if (!process_track_and_allocate_page(new_pcb, vaddr)) {
+            alloc_ok = false;
+            break;
+        }
+    }
+
+    if (alloc_ok) {
+        // Alokasikan dan tautkan stack user (0x400000 - PAGE_FRAME_SIZE)
+        if (!process_track_and_allocate_page(new_pcb, (void*) (0x400000 - PAGE_FRAME_SIZE))) {
+            alloc_ok = false;
+        }
+    }
+
+    if (!alloc_ok) {
+        paging_use_page_directory(prev_pd);
+        struct ProcessPageNode *curr = new_pcb->memory.page_list_head;
+        while (curr != NULL) {
+            struct ProcessPageNode *next = curr->next;
+            paging_free_user_page_frame(new_pd, curr->virtual_address);
+            kfree(curr);
+            curr = next;
+        }
+        paging_free_page_directory(new_pd);
+        memset(new_pcb, 0, sizeof(struct ProcessControlBlock));
+        return PROCESS_CREATE_FAIL_NOT_ENOUGH_MEMORY;
     }
 
     // Zero-out seluruh area program (membersihkan data sampah pada section .bss)
     memset(request.buf, 0, request.buffer_size);
 
-    // Alokasikan dan tautkan stack user (0x400000 - PAGE_FRAME_SIZE)
-    process_track_and_allocate_page(new_pcb, (void*) (0x400000 - PAGE_FRAME_SIZE));
-
     int8_t fs_ret = read(request);
+    if (fs_ret != 0) {
+        paging_use_page_directory(prev_pd);
+        struct ProcessPageNode *curr = new_pcb->memory.page_list_head;
+        while (curr != NULL) {
+            struct ProcessPageNode *next = curr->next;
+            paging_free_user_page_frame(new_pd, curr->virtual_address);
+            kfree(curr);
+            curr = next;
+        }
+        paging_free_page_directory(new_pd);
+        memset(new_pcb, 0, sizeof(struct ProcessControlBlock));
+        return PROCESS_CREATE_FAIL_FS_READ_FAILURE;
+    }
 
     uint32_t top = 0x400000;
     char *tokens[16];
@@ -160,10 +195,6 @@ int32_t process_create_user_process(struct EXT2DriverRequest request, const char
     *((uint32_t*) top) = (uint32_t) argc;
 
     paging_use_page_directory(prev_pd);
-    if (fs_ret != 0) {
-        paging_free_page_directory(new_pd);
-        return PROCESS_CREATE_FAIL_FS_READ_FAILURE;
-    }
 
     new_pcb->context.page_directory_virtual_addr = new_pd;
     new_pcb->context.eip                         = (uint32_t) request.buf;

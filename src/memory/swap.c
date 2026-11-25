@@ -98,7 +98,7 @@ bool swap_in_page(struct PageDirectory *page_dir, void *virtual_addr) {
 }
 
 // Handler CPU Exception Page Fault (Vector 14 / 0x0E)
-void page_fault_handler(void) {
+bool page_fault_handler(void) {
     uint32_t faulting_address;
     __asm__ volatile("mov %%cr2, %0" : "=r"(faulting_address));
 
@@ -106,9 +106,8 @@ void page_fault_handler(void) {
 
     // Coba lakukan Swap In jika page berada di swap space
     if (swap_in_page(current_pd, (void*) faulting_address)) {
-        return; // Berhasil swap in, CPU akan mengulang instruksi dengan aman!
+        return true; // Berhasil swap in, CPU akan mengulang instruksi dengan aman!
     }
 
-    // Jika bukan di swap (akses memori ilegal / unmapped page)
-    // Di sini kernel dapat memunculkan pesan error / panic
+    return false; // Bukan page di swap (akses ilegal)
 }

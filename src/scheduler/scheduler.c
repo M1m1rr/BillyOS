@@ -31,6 +31,20 @@ static int32_t scheduler_get_next_process_index(void) {
 
 __attribute__((noreturn)) void scheduler_switch_to_next_process(void) {
     int32_t next_index = scheduler_get_next_process_index();
+    if (next_index < 0) {
+        // Jika seluruh proses selesai/keluar, respawn shell agar OS tidak freeze di hlt dengan IF=0
+        struct EXT2DriverRequest req_shell = {
+            .buf          = (void*) 0x00000000,
+            .name         = "shell",
+            .name_len     = 5,
+            .parent_inode = 1,
+            .buffer_size  = 0x10000,
+            .is_directory = false
+        };
+        process_create_user_process(req_shell, NULL);
+        next_index = scheduler_get_next_process_index();
+    }
+
     if (next_index >= 0) {
         current_process_index = (uint32_t) next_index;
         struct ProcessControlBlock *next_pcb = &_process_list[next_index];
