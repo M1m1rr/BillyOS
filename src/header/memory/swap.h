@@ -37,6 +37,9 @@ bool swap_out_page(struct PageDirectory *page_dir, void *virtual_addr);
 bool swap_in_page(struct PageDirectory *page_dir, void *virtual_addr);
 
 // Handler CPU Exception Page Fault (Vector 0x0E / 14)
-void page_fault_handler(void);
+bool page_fault_handler(void);
+
+// Lepas semua slot swap milik page directory (dipanggil saat proses dihancurkan)
+void swap_release_page_directory(struct PageDirectory *page_dir);
 
 #endif

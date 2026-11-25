@@ -97,8 +97,21 @@ bool swap_in_page(struct PageDirectory *page_dir, void *virtual_addr) {
     return true;
 }
 
+// Melepas semua slot swap milik sebuah page directory (dipanggil saat proses dihancurkan)
+void swap_release_page_directory(struct PageDirectory *page_dir) {
+    for (uint32_t i = 0; i < SWAP_MAX_PAGES; i++) {
+        if (swap_manager_state.slots[i].used && swap_manager_state.slots[i].page_dir == page_dir) {
+            swap_manager_state.slots[i].used = false;
+            swap_manager_state.slots[i].virtual_address = 0;
+            swap_manager_state.slots[i].page_dir = NULL;
+            swap_manager_state.free_slots_count++;
+        }
+    }
+}
+
 // Handler CPU Exception Page Fault (Vector 14 / 0x0E)
-void page_fault_handler(void) {
+// Return true jika fault berhasil ditangani (swap in), false jika akses ilegal.
+bool page_fault_handler(void) {
     uint32_t faulting_address;
     __asm__ volatile("mov %%cr2, %0" : "=r"(faulting_address));
 
@@ -106,9 +119,9 @@ void page_fault_handler(void) {
 
     // Coba lakukan Swap In jika page berada di swap space
     if (swap_in_page(current_pd, (void*) faulting_address)) {
-        return; // Berhasil swap in, CPU akan mengulang instruksi dengan aman!
+        return true; // Berhasil swap in, CPU akan mengulang instruksi dengan aman!
     }
 
-    // Jika bukan di swap (akses memori ilegal / unmapped page)
-    // Di sini kernel dapat memunculkan pesan error / panic
+    // Bukan di swap: akses memori ilegal / unmapped page, caller yang memutuskan nasib proses
+    return false;
 }

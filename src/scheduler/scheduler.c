@@ -1,6 +1,9 @@
 #include "header/scheduler/scheduler.h"
 #include "header/cpu/interrupt.h"
 #include "header/memory/paging.h"
+#include "header/driver/framebuffer.h"
+#include "header/driver/vga.h"
+#include "header/filesystem/ext2.h"
 
 static uint32_t current_process_index = 0;
 
@@ -31,6 +34,26 @@ static int32_t scheduler_get_next_process_index(void) {
 
 __attribute__((noreturn)) void scheduler_switch_to_next_process(void) {
     int32_t next_index = scheduler_get_next_process_index();
+
+    if (next_index < 0) {
+        // Tidak ada proses tersisa (mis. shell exit/crash). Jangan hlt dengan IF=0 (freeze permanen):
+        // jalankan ulang shell.
+        struct EXT2DriverRequest req_shell = {
+            .buf          = (void*) 0x00000000,
+            .name         = "shell",
+            .name_len     = 5,
+            .parent_inode = 1,
+            .buffer_size  = 0x10000,
+            .is_directory = false
+        };
+        if (process_create_user_process(req_shell, NULL) == PROCESS_CREATE_SUCCESS) {
+            vga_init_graphics_mode(); // kembali ke mode teks grafis BillyOS kalau proses terakhir ada di mode 13h
+            framebuffer_clear();
+            console_set_position(0, 0);
+            next_index = scheduler_get_next_process_index();
+        }
+    }
+
     if (next_index >= 0) {
         current_process_index = (uint32_t) next_index;
         struct ProcessControlBlock *next_pcb = &_process_list[next_index];
@@ -43,7 +66,8 @@ __attribute__((noreturn)) void scheduler_switch_to_next_process(void) {
         process_context_switch(next_pcb->context);
     }
 
-    // Fallback jika tidak ada proses yang siap dijalankan sama sekali
+    // Shell pun gagal dibuat (mis. memori habis / FS rusak): halt permanen
+    __asm__ volatile("cli");
     while (true) {
         __asm__ volatile("hlt");
     }

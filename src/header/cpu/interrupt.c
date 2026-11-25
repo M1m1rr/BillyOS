@@ -132,13 +132,18 @@ static void syscall(struct InterruptFrame frame) {
             struct ProcessControlBlock *current_pcb = process_get_current_running_pcb_pointer();
             bool is_self = (current_pcb != NULL && current_pcb->metadata.pid == target_pid);
 
+            if (is_self) {
+                // Tulis hasil SEBELUM destroy: setelah itu page directory user sudah dibebaskan
+                if (frame.cpu.general.ecx != 0) {
+                    *((bool*) frame.cpu.general.ecx) = true;
+                }
+                process_destroy(target_pid);
+                scheduler_switch_to_next_process();
+            }
+
             bool success = process_destroy(target_pid);
             if (frame.cpu.general.ecx != 0) {
                 *((bool*) frame.cpu.general.ecx) = success;
-            }
-
-            if (is_self && success) {
-                scheduler_switch_to_next_process();
             }
             break;
         }
@@ -301,6 +306,43 @@ static void syscall(struct InterruptFrame frame) {
     }   
 }
 
+static void kprint(const char *s, uint8_t color) {
+    for (; *s != '\0'; s++) console_putchar(*s, color);
+}
+
+static void kprint_hex(uint32_t v, uint8_t color) {
+    static const char digits[] = "0123456789ABCDEF";
+    kprint("0x", color);
+    for (int shift = 28; shift >= 0; shift -= 4) {
+        console_putchar(digits[(v >> shift) & 0xF], color);
+    }
+}
+
+// Exception fatal: proses user dibunuh, exception di kernel = panic.
+static void handle_fatal_exception(const struct InterruptFrame *frame) {
+    bool from_user = (frame->int_stack.cs & 0x3) == 0x3;
+
+    kprint("\n[kernel] Exception ", 0x0C);
+    kprint_hex(frame->int_number, 0x0C);
+    kprint(" di EIP=", 0x0C);
+    kprint_hex(frame->int_stack.eip, 0x0C);
+
+    if (from_user) {
+        kprint(" -> proses dihentikan\n", 0x0C);
+        struct ProcessControlBlock *pcb = process_get_current_running_pcb_pointer();
+        if (pcb != NULL) {
+            process_destroy(pcb->metadata.pid);
+        }
+        scheduler_switch_to_next_process();
+    }
+
+    kprint("\nKERNEL PANIC\n", 0x0C);
+    __asm__ volatile("cli");
+    while (true) {
+        __asm__ volatile("hlt");
+    }
+}
+
 void main_interrupt_handler(struct InterruptFrame frame) {
     switch (frame.int_number) {
         case PIC1_OFFSET + IRQ_TIMER: {
@@ -321,16 +363,21 @@ void main_interrupt_handler(struct InterruptFrame frame) {
             keyboard_isr();
             break;
         case 14: // Page Fault Exception (Vector 0x0E)
-            page_fault_handler();
+            if (!page_fault_handler()) {
+                handle_fatal_exception(&frame);
+            }
             break;
         case 0x30:
-            // ISR stub memulihkan EFLAGS user (IF=1) lewat popf, jadi timer bisa menyela di tengah syscall.
-            // Context switch selalu membuat iret frame ring 3, sehingga preempt di mode kernel merusak
-            // context. Matikan interrupt selama syscall; iret nanti mengembalikan IF user.
+            // Interrupt gate sudah meng-clear IF saat masuk handler (popf di stub hanya memulihkan IF=0),
+            // jadi cli di bawah hanya pengaman; iret nanti mengembalikan IF milik user.
             __asm__ volatile("cli");
             syscall(frame);
             break;
         default:
+            // Semua exception CPU (kecuali NMI) fatal; jangan di-iret ke instruksi yang sama
+            if (frame.int_number < 32 && frame.int_number != 2) {
+                handle_fatal_exception(&frame);
+            }
             break;
     }
 }

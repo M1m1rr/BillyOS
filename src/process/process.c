@@ -3,6 +3,7 @@
 #include "header/stdlib/string.h"
 #include "header/cpu/gdt.h"
 #include "header/memory/heap.h"
+#include "header/memory/swap.h"
 
 struct ProcessControlBlock _process_list[PROCESS_COUNT_MAX] = {0};
 
@@ -48,13 +49,8 @@ bool process_track_and_allocate_page(struct ProcessControlBlock *pcb, void *vadd
     if (!paging_allocate_user_page_frame(pd, vaddr)) {
         return false;
     }
-    // Alokasikan node penaut dari kernel heap
-    struct ProcessPageNode *node = (struct ProcessPageNode*) kmalloc(sizeof(struct ProcessPageNode));
-    if (node != NULL) {
-        node->virtual_address      = vaddr;
-        node->next                 = pcb->memory.page_list_head;
-        pcb->memory.page_list_head = node;
-    }
+    // Frame dibebaskan lewat page table saat paging_free_page_directory(),
+    // jadi tidak perlu linked-list pelacak (dulu kehabisan pool kmalloc).
     pcb->memory.page_frame_count++;
     pcb->metadata.memory_kb = pcb->memory.page_frame_count * 4;
     return true;
@@ -70,7 +66,8 @@ int32_t process_create_user_process(struct EXT2DriverRequest request, const char
     }
 
     uint32_t page_frame_count_needed = ceil_div(request.buffer_size + PAGE_FRAME_SIZE, PAGE_FRAME_SIZE);
-    if (!paging_allocate_check(page_frame_count_needed)) {
+    // paging_allocate_check() menerima jumlah BYTE, bukan jumlah page
+    if (!paging_allocate_check(page_frame_count_needed * PAGE_FRAME_SIZE)) {
         return PROCESS_CREATE_FAIL_NOT_ENOUGH_MEMORY;
     }
 
@@ -105,16 +102,26 @@ int32_t process_create_user_process(struct EXT2DriverRequest request, const char
     paging_use_page_directory(new_pd);
 
     uint32_t code_pages = ceil_div(request.buffer_size, PAGE_FRAME_SIZE);
-    for (uint32_t i = 0; i < code_pages; i++) {
+    bool alloc_ok = true;
+    for (uint32_t i = 0; i < code_pages && alloc_ok; i++) {
         void *vaddr = (void*) ((uint32_t) request.buf + i * PAGE_FRAME_SIZE);
-        process_track_and_allocate_page(new_pcb, vaddr);
+        alloc_ok = process_track_and_allocate_page(new_pcb, vaddr);
+    }
+
+    // Alokasikan stack user (0x400000 - PAGE_FRAME_SIZE)
+    if (alloc_ok) {
+        alloc_ok = process_track_and_allocate_page(new_pcb, (void*) (0x400000 - PAGE_FRAME_SIZE));
+    }
+
+    if (!alloc_ok) {
+        // Memori fisik habis di tengah jalan: kembali ke PD lama, bebaskan semua frame yang sempat teralokasi
+        paging_use_page_directory(prev_pd);
+        paging_free_page_directory(new_pd);
+        return PROCESS_CREATE_FAIL_NOT_ENOUGH_MEMORY;
     }
 
     // Zero-out seluruh area program (membersihkan data sampah pada section .bss)
     memset(request.buf, 0, request.buffer_size);
-
-    // Alokasikan dan tautkan stack user (0x400000 - PAGE_FRAME_SIZE)
-    process_track_and_allocate_page(new_pcb, (void*) (0x400000 - PAGE_FRAME_SIZE));
 
     int8_t fs_ret = read(request);
 
@@ -195,15 +202,8 @@ bool process_destroy(uint32_t pid) {
             struct ProcessControlBlock *pcb = &_process_list[i];
             struct PageDirectory *pd = pcb->context.page_directory_virtual_addr;
 
-            // Bebaskan seluruh halaman dinamis yang terhubung di linked-list
-            struct ProcessPageNode *curr = pcb->memory.page_list_head;
-            while (curr != NULL) {
-                struct ProcessPageNode *next = curr->next;
-                paging_free_user_page_frame(pd, curr->virtual_address);
-                kfree(curr); // Bebaskan node pelacak ke heap
-                curr = next;
-            }
-
+            // Bebaskan slot swap milik proses ini, lalu seluruh frame (kode, stack, heap) + page table + PD
+            swap_release_page_directory(pd);
             paging_free_page_directory(pd);
             memset(pcb, 0, sizeof(struct ProcessControlBlock));
             process_manager_state.active_process_count--;

@@ -201,26 +201,47 @@ struct PageDirectory* paging_create_new_page_directory(void) {
     return new_pd;
 }
 
-bool paging_free_page_directory(struct PageDirectory *page_dir) {
-    if (page_dir == paging_get_current_page_directory_addr()) {
-        paging_use_page_directory(&_paging_kernel_page_directory);
+static void paging_release_frame(uint32_t pfn) {
+    if (pfn >= KERNEL_RESERVED_PAGE_FRAME_COUNT && pfn < PAGE_FRAME_MAX_COUNT &&
+        page_manager_state.page_frame_map[pfn]) {
+        page_manager_state.page_frame_map[pfn] = false;
+        page_manager_state.free_page_frame_count++;
     }
+}
 
+// Membebaskan SEMUA frame milik page directory: frame data (kode, stack, heap), frame page table, lalu PD-nya.
+// Page table hanya bisa diakses lewat recursive mapping, jadi PD target di-load dulu ke CR3 sementara.
+bool paging_free_page_directory(struct PageDirectory *page_dir) {
+    int32_t idx = -1;
     for (uint32_t i = 0; i < PAGING_DIRECTORY_TABLE_MAX_COUNT; i++) {
         if (&page_directory_list[i] == page_dir) {
-            for (uint32_t d = 0; d < 0x300; d++) {
-                if (page_dir->table[d].flag.present_bit) {
-                    uint32_t pt_pfn = page_dir->table[d].page_table_base_address;
-                    if (pt_pfn >= KERNEL_RESERVED_PAGE_FRAME_COUNT && pt_pfn < PAGE_FRAME_MAX_COUNT) {
-                        page_manager_state.page_frame_map[pt_pfn] = false;
-                        page_manager_state.free_page_frame_count++;
-                    }
-                }
-            }
-            memset(page_dir, 0, sizeof(struct PageDirectory));
-            page_directory_manager.page_directory_used[i] = false;
-            return true;
+            idx = (int32_t) i;
+            break;
         }
     }
-    return false;
+    if (idx < 0) return false;
+
+    struct PageDirectory *prev_pd = paging_get_current_page_directory_addr();
+    if (prev_pd != page_dir) {
+        paging_use_page_directory(page_dir);
+    }
+
+    for (uint32_t d = 0; d < 0x300; d++) {
+        if (!page_dir->table[d].flag.present_bit) continue;
+
+        struct PageTable *pt = (struct PageTable*) (RECURSIVE_PAGE_TABLES_VIRTUAL_ADDRESS + d * PAGE_FRAME_SIZE);
+        for (uint32_t t = 0; t < PAGE_ENTRY_COUNT; t++) {
+            if (pt->table[t].flag.present_bit) {
+                paging_release_frame(pt->table[t].physical_page_base_address);
+            }
+        }
+        paging_release_frame(page_dir->table[d].page_table_base_address);
+    }
+
+    // Jangan pernah kembali ke PD yang sedang dibebaskan
+    paging_use_page_directory(prev_pd == page_dir ? &_paging_kernel_page_directory : prev_pd);
+
+    memset(page_dir, 0, sizeof(struct PageDirectory));
+    page_directory_manager.page_directory_used[idx] = false;
+    return true;
 }
