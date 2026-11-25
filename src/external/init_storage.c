@@ -145,6 +145,6 @@ int main(int argc, char *argv[]) {
 
     free(disk);
     free(sample_buf);
-    printf(">> Berhasil inisialisasi disk 32MB dengan seluruh struktur file/folder bawaan!\n");
+    printf("Berhasil inisialisasi disk 32MB\n");
     return 0;
 }

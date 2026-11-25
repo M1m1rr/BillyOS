@@ -40,6 +40,7 @@ void vga_clear_screen(uint8_t color);
 void vga_draw_char(int col, int row, char c, uint8_t fg, uint8_t bg);
 void vga_set_cursor(int row, int col);
 void vga_scroll(void);
+void vga_scroll_lines(int delta);
 
 void vga_set_doom_palette(void);
 

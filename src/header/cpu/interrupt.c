@@ -11,6 +11,7 @@
 #include "header/driver/vga.h"
 #include "header/filesystem/bfs.h"
 #include "header/memory/heap.h"
+#include "header/driver/speaker.h"
 
 void io_wait(void) {
     out(0x80, 0);
@@ -275,22 +276,7 @@ static void syscall(struct InterruptFrame frame) {
             }
             break;
         }
-        case 22:
-            // Syscall 22: milidetik sejak boot. EBX = uint32_t* hasil
-            if (frame.cpu.general.ebx != 0) {
-                *((uint32_t*) frame.cpu.general.ebx) = system_ticks_ms;
-            }
-            break;
-        case 23:
-            // Syscall 23: status tombol fisik. EBX = uint8_t[256] hasil
-            if (frame.cpu.general.ebx != 0) {
-                keyboard_get_key_state((uint8_t*) frame.cpu.general.ebx);
-            }
-            break;
         case 21: {
-            // Syscall 21: Antarmuka VGA Mode 13h (320x200, 256 Warna)
-            // EBX = Perintah (0: Set Mode 13h, 1: Set Palet 256, 2: Blit Frame 256, 3: Restore Mode 12h)
-            // ECX = Parameter pointer buffer (palet atau frame)
             uint32_t cmd = frame.cpu.general.ebx;
             if (cmd == 0) {
                 vga_set_mode_13h();
@@ -301,6 +287,48 @@ static void syscall(struct InterruptFrame frame) {
             } else if (cmd == 3) {
                 vga_init_graphics_mode(); // Kembali ke Mode 12h 640x480 BillyOS
             }
+            break;
+        }
+        case 22:
+            // Syscall 22: milidetik sejak boot. EBX = uint32_t* hasil
+            if (frame.cpu.general.ebx != 0) {
+                *((uint32_t*) frame.cpu.general.ebx) = system_ticks_ms;
+            }
+            break;
+        case 23:
+            if (frame.cpu.general.ebx != 0) {
+                keyboard_get_key_state((uint8_t*) frame.cpu.general.ebx);
+            }
+            break;
+                case 24: {
+            if (frame.cpu.general.ebx == 0) {
+                speaker_play(frame.cpu.general.ecx);
+            } else if (frame.cpu.general.ebx == 1) {
+                speaker_stop();
+            } else if (frame.cpu.general.ebx == 2) {
+                speaker_beep(frame.cpu.general.ecx, frame.cpu.general.edx);
+            }
+            break;
+        }
+        case 25: {
+            speaker_stop();
+            __asm__ volatile("cli");
+            if (frame.cpu.general.ebx == 1) {
+                // Trigger keyboard controller reset pulse (reboot)
+                out(0x64, 0xFE);
+            } else {
+                // ACPI power-off ports: QEMU PIIX4, Bochs/older QEMU, VirtualBox
+                out16(0x604, 0x2000);
+                out16(0xB004, 0x2000);
+                out16(0x4004, 0x3400);
+            }
+            while (1) {
+                __asm__ volatile("hlt");
+            }
+            break;
+        }
+        case 26: {
+            vga_scroll_lines((int) frame.cpu.general.ebx);
             break;
         }
     }   

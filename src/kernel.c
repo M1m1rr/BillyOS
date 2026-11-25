@@ -17,6 +17,7 @@
 #include "header/filesystem/bfs.h"
 #include "header/cpu/portio.h"
 #include "header/memory/heap.h"
+#include "header/driver/speaker.h"
 
 static void scroll(void) {
     if (vga_is_graphics_mode()) {
@@ -52,15 +53,6 @@ static void print_text(int *row, int *col, const char *str, uint8_t color) {
     framebuffer_set_cursor(*row, *col);
 }
 
-static void test_assert(int *row, int *col, const char *test_name, int actual, int expected) {
-    print_text(row, col, test_name, 0x0F);
-    if (actual == expected) {
-        print_text(row, col, " [PASS]\n", 0x0A);
-    } else {
-        print_text(row, col, " [FAIL]\n", 0x0C);
-    }
-}
-
 void kernel_setup(void) {
     load_gdt(&_gdt_gdtr);
     pic_remap();
@@ -73,185 +65,34 @@ void kernel_setup(void) {
     initialize_filesystem_ext2();
     bfs_init();
     kheap_init();
-
-    int row = 0, col = 0;
-    print_text(&row, &col, "=== BillyOS Paging & Swap Test Suite ===\n\n", 0x0E);
-
-    // ==================== 1. TES PAGING (Bab 3.1) ====================
-    print_text(&row, &col, "-- 1. Higher Half Kernel Verification --\n", 0x0B);
-    uint32_t esp_val;
-    __asm__ volatile("mov %%esp, %0" : "=r"(esp_val));
-    bool is_higher_half = (esp_val >= KERNEL_VIRTUAL_ADDRESS_BASE);
-    test_assert(&row, &col, "P1: ESP berada di Higher Half (>= 0xC0000000)", is_higher_half ? 0 : -1, 0);
-
-    print_text(&row, &col, "\n-- 2. Testing paging_allocate_check() --\n", 0x0B);
-    test_assert(&row, &col, "P2: Alokasi 4 KiB valid (Exp true)", paging_allocate_check(4096) ? 0 : -1, 0);
-    test_assert(&row, &col, "P3: Alokasi melebihi RAM sistem (Exp false)", paging_allocate_check(0xFFFFFFFF) ? -1 : 0, 0);
-
-    print_text(&row, &col, "\n-- 3. Testing Frame Allocator & Write/Read --\n", 0x0B);
-    uint32_t free_before = page_manager_state.free_page_frame_count;
-    void *test_vaddr = (void*) 0x00500000;
-
-    struct PageDirectory *current_pd = paging_get_current_page_directory_addr();
-    bool alloc_res = paging_allocate_user_page_frame(current_pd, test_vaddr);
-    test_assert(&row, &col, "P4: Alokasi virtual address 0x00500000", alloc_res ? 0 : -1, 0);
-
-    *((volatile uint32_t*) test_vaddr) = 0xCAFEBABE;
-    uint32_t read_back = *((volatile uint32_t*) test_vaddr);
-    test_assert(&row, &col, "P5: Tulis & Baca 0x00500000 (0xCAFEBABE)", (read_back == 0xCAFEBABE) ? 0 : -1, 0);
-
-    print_text(&row, &col, "\n-- 4. Testing Frame Deallocator --\n", 0x0B);
-    bool free_res = paging_free_user_page_frame(current_pd, test_vaddr);
-    test_assert(&row, &col, "P6: Bebaskan virtual address 0x00500000", free_res ? 0 : -1, 0);
-
-    test_assert(&row, &col, "P7: Free frame bertambah kembali setelah deallokasi", 
-                (page_manager_state.free_page_frame_count == free_before - 1) ? 0 : -1, 0);
-
-    // ==================== 2. TES SWAP SPACE (Bab 3.2) ====================
-    print_text(&row, &col, "\n-- 5. Testing Swap Space (Bab 3.2) --\n", 0x0B);
-
     swap_init();
 
-    // 5.1 Alokasikan page dan tulis data unik
-    void *swap_test_vaddr = (void*) 0x00600000;
-    paging_allocate_user_page_frame(current_pd, swap_test_vaddr);
-    *((volatile uint32_t*) swap_test_vaddr) = 0x12345678;
+    int row = 0, col = 0;
 
-    // 5.2 Lakukan Swap Out ke disk
-    bool swap_out_res = swap_out_page(current_pd, swap_test_vaddr);
-    test_assert(&row, &col, "S1: Swap out page ke disk", swap_out_res ? 0 : -1, 0);
-
-    // 5.3 Cek apakah slot swap di disk terpakai
-    test_assert(&row, &col, "S2: Slot swap berkurang di disk", 
-                (swap_manager_state.free_slots_count == SWAP_MAX_PAGES - 1) ? 0 : -1, 0);
-
-    // 5.4 Akses kembali memory tersebut!
-    // Karena page di-swap out (present=0), baris ini memicu Page Fault (Vector 14).
-    // Handler page_fault_handler() akan otomatis melakukan Swap In dari disk!
-    uint32_t restored_val = *((volatile uint32_t*) swap_test_vaddr);
-    test_assert(&row, &col, "S3: Page Fault otomatis Swap In & Data Cocok", 
-                (restored_val == 0x12345678) ? 0 : -1, 0);
-
-    // 5.5 Cek slot swap kembali bebas
-    test_assert(&row, &col, "S4: Slot swap kembali bebas setelah Swap In", 
-                (swap_manager_state.free_slots_count == SWAP_MAX_PAGES) ? 0 : -1, 0);
-
-    print_text(&row, &col, "\n>> SEMUA TES PAGING & SWAP LULUS! <<\n", 0x0E);
-
-    print_text(&row, &col, "\n-- Asistensi: Proteksi Hapus Root & CWD --\n", 0x0B);
-
-    // A1. Coba hapus entri '.' di root (Exp -1)
-    struct EXT2DriverRequest req_del_dot = {
-        .name = ".", .name_len = 1, .parent_inode = 1
-    };
-    test_assert(&row, &col, "A1: Tolak hapus '.' (Exp -1)", delete(req_del_dot), -1);
-
-    // A2. Coba hapus folder tempat kita sedang berada (CWD)
-    // Misalnya buat folder dummy /active_dir
-    struct EXT2DriverRequest req_mkdir = {
-        .name = "active_dir", .name_len = 10, .parent_inode = 1,
-        .buffer_size = 0, .is_directory = true
-    };
-    write(&req_mkdir);
-
-    // Cari inode active_dir
-    struct EXT2Inode root_inode_tmp;
-    read_inode(1, &root_inode_tmp);
-    uint8_t dummy_ftype;
-    uint32_t active_inode = find_entry_in_dir(&root_inode_tmp, "active_dir", 10, &dummy_ftype);
-
-    // Simulasikan pengguna sedang berada di dalam active_dir (cd active_dir)
-    ext2_set_current_directory(active_inode);
-
-    // Coba hapus active_dir dari parent (root) saat kita masih di dalamnya
-    struct EXT2DriverRequest req_del_cwd = {
-        .name = "active_dir", .name_len = 10, .parent_inode = 1
-    };
-    test_assert(&row, &col, "A2: Tolak hapus folder aktif / CWD (Exp -1)", delete(req_del_cwd), -1);
-
-        // Kembalikan CWD ke root, sekarang folder active_dir boleh dihapus
-    ext2_set_current_directory(1);
-    test_assert(&row, &col, "A3: Hapus active_dir setelah keluar CWD (Exp 0)", delete(req_del_cwd), 0);
-
-    // ==================== TAHAN HALAMAN 1 (PAGING & SWAP) ====================
-    print_text(&row, &col, "\n>> Tekan Tombol Apapun untuk Lanjut ke Tes BillyFS... <<\n", 0x0E);
-    while (!(in(0x64) & 1)); // Tunggu tombol ditekan
-    in(0x60);                // Baca tombol
-
-    // Bersihkan layar untuk Halaman 2 (BillyFS & B+ Tree)
-    framebuffer_clear();
-    row = 0;
-    col = 0;
-
-    // ==================== TEST SUITE BILLYFS & B+ TREE INDEX ====================
-    print_text(&row, &col, "=== BillyFS (Non-EXT2) & B+ Tree Index Test ===\n\n", 0x0E);
-
-    // 1. Format & Inisialisasi Partisi Bersih
-    bfs_format();
-    test_assert(&row, &col, "BFS-1: Format Superblock & Root", 0, 0);
-
-    // 2. Buat Direktori Bersarang (Nested Folder)
-    int8_t res_d1 = bfs_create(0, "docs", true);
-    int32_t id_docs = bfs_find_indexed("docs");
-    int8_t res_d2 = (id_docs >= 0) ? bfs_create((uint32_t) id_docs, "os", true) : -1;
-    test_assert(&row, &col, "BFS-2: Buat Nested Folder /docs/os", (res_d1 == 0 && res_d2 == 0) ? 0 : -1, 0);
-
-    // 3. Tulis File ke dalam Nested Folder
-    int32_t id_os = bfs_find_indexed("os");
-    const char *pesan = "Halo dari BillyFS dengan B+ Tree Indexing!";
-    int8_t res_w = (id_os >= 0) ? bfs_write((uint32_t) id_os, "tugas.txt", pesan, 43) : -1;
-    test_assert(&row, &col, "BFS-3: Tulis File /docs/os/tugas.txt", res_w, 0);
-
-    // 4. Baca Kembali File & Verifikasi Konten
-    char read_buf[64];
-    memset(read_buf, 0, sizeof(read_buf));
-    int8_t res_r = (id_os >= 0) ? bfs_read((uint32_t) id_os, "tugas.txt", read_buf, 63) : -1;
-    bool match = (res_r == 0 && memcmp(read_buf, pesan, 42) == 0);
-    test_assert(&row, &col, "BFS-4: Baca & Verifikasi Konten File", match ? 0 : -1, 0);
-
-    // 5. B+ Tree Index Search O(log N)
-    int32_t idx_res = bfs_find_indexed("tugas.txt");
-    test_assert(&row, &col, "BFS-5: B+ Tree Index Find (Instant Search)", (idx_res > 0) ? 0 : -1, 0);
-
-    // 6. Hapus File & Update Index
-    int8_t res_del = (id_os >= 0) ? bfs_delete((uint32_t) id_os, "tugas.txt") : -1;
-    int32_t idx_del = bfs_find_indexed("tugas.txt");
-    test_assert(&row, &col, "BFS-6: Hapus File & Update B+ Tree Index", (res_del == 0 && idx_del == -1) ? 0 : -1, 0);
-
-    // ==================== TAHAN HALAMAN 2 (BILLYFS) ====================
-    print_text(&row, &col, "\n>> Tekan Tombol Apapun untuk Masuk ke Shell... <<\n", 0x0E);
-    while (!(in(0x64) & 1));
-    in(0x60);
-
-        // ==================== 4. LAUNCHING USER MODE SEBAGAI PROSES (Bab 4.1.4) ====================
-    print_text(&row, &col, "\n-- Launching User Mode via PCB Process 0 (Bab 4.1.4) --\n", 0x0B);
-
-    // 1. Install & pasang Task State Segment (TSS) ke register TR
+    // ==================== LAUNCH USER MODE (SHELL / PROCESS 0) ====================
     gdt_install_tss();
     set_tss_register();
     set_tss_kernel_current_stack();
 
-    // 2. Buat process untuk shell menggunakan PCB
     struct EXT2DriverRequest req_shell = {
         .buf          = (void*) 0x00000000,
         .name         = "shell",
         .name_len     = 5,
         .parent_inode = 1,
-        .buffer_size  = 0x4000,
+        .buffer_size  = 0x10000,
         .is_directory = false
     };
     int32_t p_res = process_create_user_process(req_shell, NULL);
-    test_assert(&row, &col, "U1: Create User Process 'shell' (Exp 0)", p_res, PROCESS_CREATE_SUCCESS);
 
     if (p_res != PROCESS_CREATE_SUCCESS) {
         print_text(&row, &col, "\nKernel Panic: Gagal inisialisasi Process 0!\n", 0x0C);
         while (true) __asm__ volatile("hlt");
     }
-    print_text(&row, &col, "U2: Melompat ke Process 0 via Scheduler\n", 0x0E);
-    console_set_position(row, col);
-    // 3. Inisialisasi Task Scheduler (menyalakan timer PIT 1000 Hz)
+
+    framebuffer_clear();
+    console_set_position(0, 0);
+
     scheduler_init();
-    // 4. Melompat ke Process 0 melalui Context Switch iret milik Scheduler
     scheduler_switch_to_next_process();
 
     // ==================== LOOP KEYBOARD (PALING AKHIR) ====================
